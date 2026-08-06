@@ -1,16 +1,16 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
+import os  # <-- ADD THIS LINE
 
 # ==========================================
 # 1. CONNECT TO CLOUD SERVICES
 # ==========================================
-# These pull from the secret "Environment Variables" you set up in Render
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-SHEET_ID = st.secrets["GOOGLE_SHEET_ID"]
+# Load secrets from Render Environment Variables using os.environ
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
-# Turn on the connection to the database
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Create a memory space so the website remembers if someone is logged in
