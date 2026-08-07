@@ -274,6 +274,3 @@ if st.session_state.user_id is None:
     login_page()
 else:
     main_calculator()
-```eof
-
-Just replace your `app.py` file with this! If you hit the "C" key to clear your browser cache and refresh, you'll see your awesome custom material calculator is back, complete with the Pie Chart!
