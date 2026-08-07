@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
-import os 
+import os
+import requests
+from io import BytesIO
 
 # Force a clean, wide layout
 st.set_page_config(page_title="Carbon Calculator", page_icon="🏢", layout="wide")
@@ -13,7 +15,11 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+@st.cache_resource
+def init_supabase():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_supabase()
 
 if "user_id" not in st.session_state:
     st.session_state.user_id = None
@@ -25,13 +31,27 @@ if "user_email" not in st.session_state:
 # ==========================================
 @st.cache_data(ttl=3600) 
 def load_google_sheet_db():
+    if not SHEET_ID:
+        st.error("Google Sheet ID is missing. Please check your Environment Variables.")
+        return None
+        
     export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
-    return {
-        "factors": pd.read_excel(export_url, sheet_name="Component_Factors"),
-        "mixes": pd.read_excel(export_url, sheet_name="Mix_Designs"),
-        "structures": pd.read_excel(export_url, sheet_name="Project_Structures"),
-        "unit_logic": pd.read_excel(export_url, sheet_name="Unit_Logic")
-    }
+    
+    try:
+        # Download the file once to prevent multiple heavy network requests
+        response = requests.get(export_url)
+        response.raise_for_status()
+        excel_data = BytesIO(response.content)
+        
+        return {
+            "factors": pd.read_excel(excel_data, sheet_name="Component_Factors"),
+            "mixes": pd.read_excel(excel_data, sheet_name="Mix_Designs"),
+            "structures": pd.read_excel(excel_data, sheet_name="Project_Structures"),
+            "unit_logic": pd.read_excel(excel_data, sheet_name="Unit_Logic")
+        }
+    except Exception as e:
+        st.error(f"Failed to load database: {e}")
+        return None
 
 # ==========================================
 # 3. SECURE LOGIN UI (INVITE-ONLY)
@@ -70,6 +90,11 @@ def main_calculator():
     st.title("Embodied Carbon Calculator")
     
     db = load_google_sheet_db()
+    
+    # Catch any connection errors gracefully without crashing the UI
+    if db is None:
+        st.warning("Cannot start the calculator without the reference database.")
+        st.stop()
 
     # Restoring your original layout with Tabs
     tab1, tab2 = st.tabs(["Project Calculator", "Materials Reference"])
