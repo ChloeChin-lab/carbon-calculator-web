@@ -3,6 +3,9 @@ import pandas as pd
 from supabase import create_client, Client
 import os 
 
+# Force a clean, wide layout
+st.set_page_config(page_title="Carbon Calculator", page_icon="🏢", layout="wide")
+
 # ==========================================
 # 1. CONNECT TO CLOUD SERVICES
 # ==========================================
@@ -35,7 +38,6 @@ def load_google_sheet_db():
 # ==========================================
 def login_page():
     st.title("Embodied Carbon Calculator")
-    st.info("Secure Client Portal. Please enter your credentials to proceed.")
     
     # We completely removed the Tabs and the "Sign Up" code.
     # Now it is just a clean, single login form.
@@ -58,66 +60,83 @@ def login_page():
 def main_calculator():
     st.sidebar.success(f"Logged in as: {st.session_state.user_email}")
     
-    if st.sidebar.button("🔄 Sync Latest Database"):
-        st.cache_data.clear()
-        st.sidebar.success("Database synced with Google Sheets!")
+    # We removed the unprofessional "Sync Database" button. 
+    # The app automatically refreshes data in the background every hour now.
         
     if st.sidebar.button("Log Out"):
         st.session_state.user_id = None
         st.rerun()
 
-    st.title("Project Calculator")
+    st.title("Embodied Carbon Calculator")
     
     db = load_google_sheet_db()
 
-    project_name = st.text_input("Project Name:")
+    # Restoring your original layout with Tabs
+    tab1, tab2 = st.tabs(["Project Calculator", "Materials Reference"])
     
-    structure_options = db["structures"]["Structure_Name"].tolist()
-    selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options)
-    
-    if selected_structure != "---":
-        st.markdown("### Configure Components")
+    with tab1:
+        st.markdown("### 1. Project Details")
+        project_name = st.text_input("Project Name:")
         
-        components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
-        component_list = [c.strip() for c in components_str.split(",")]
+        structure_options = db["structures"]["Structure_Name"].tolist()
+        selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options)
         
-        project_data = {}
-        
-        for comp in component_list:
-            col1, col2 = st.columns(2)
-            with col1:
-                quantity = st.number_input(f"Amount of {comp}:", min_value=0.0, step=1.0, key=f"qty_{comp}")
-            with col2:
-                unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp]
-                if not unit_row.empty:
-                    units = str(unit_row["Unit_Options"].values[0]).split(",")
-                    selected_unit = st.selectbox("Unit:", units, key=f"unit_{comp}")
-                else:
-                    selected_unit = "m3"
-                    st.write("Unit: m3")
+        if selected_structure != "---":
+            st.markdown("### 2. Configure Components")
             
-            project_data[comp] = {"quantity": quantity, "unit": selected_unit}
+            components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
+            component_list = [c.strip() for c in components_str.split(",")]
+            
+            project_data = {}
+            
+            for comp in component_list:
+                col1, col2 = st.columns(2)
+                with col1:
+                    quantity = st.number_input(f"Amount of {comp}:", min_value=0.0, step=1.0, key=f"qty_{comp}")
+                with col2:
+                    unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp]
+                    if not unit_row.empty:
+                        units = str(unit_row["Unit_Options"].values[0]).split(",")
+                        selected_unit = st.selectbox("Unit:", units, key=f"unit_{comp}")
+                    else:
+                        selected_unit = "m3"
+                        st.write("Unit: m3")
+                
+                project_data[comp] = {"quantity": quantity, "unit": selected_unit}
+            
+            st.markdown("---")
+            
+            # Clean, professional button text. No mention of "Cloud".
+            if st.button("Calculate & Save Project"):
+                if not project_name:
+                    st.error("Please enter a Project Name to save.")
+                else:
+                    with st.spinner("Processing calculations..."):
+                        total_carbon = sum(item["quantity"] * 350 for item in project_data.values())
+                        
+                        project_payload = {
+                            "user_id": st.session_state.user_id,
+                            "project_name": project_name,
+                            "structure_type": selected_structure,
+                            "total_embodied_carbon": total_carbon,
+                            "component_data": project_data 
+                        }
+                        
+                        supabase.table("saved_projects").insert(project_payload).execute()
+                        
+                        # Clean success message
+                        st.success(f"Project '{project_name}' saved successfully!")
+                        st.metric(label="Total Embodied Carbon (kgCO2e)", value=f"{total_carbon:,.2f}")
+
+    with tab2:
+        st.markdown("### Materials & Carbon Factors Database")
+        st.info("This reference data is automatically synced from the central engineering database.")
         
-        st.markdown("---")
-        if st.button("Calculate & Save Project to Cloud"):
-            if not project_name:
-                st.error("Please enter a Project Name to save.")
-            else:
-                with st.spinner("Processing calculations..."):
-                    total_carbon = sum(item["quantity"] * 350 for item in project_data.values())
-                    
-                    project_payload = {
-                        "user_id": st.session_state.user_id,
-                        "project_name": project_name,
-                        "structure_type": selected_structure,
-                        "total_embodied_carbon": total_carbon,
-                        "component_data": project_data 
-                    }
-                    
-                    supabase.table("saved_projects").insert(project_payload).execute()
-                    
-                    st.success(f"Project '{project_name}' saved securely to the cloud!")
-                    st.metric(label="Total Embodied Carbon (kgCO2e)", value=f"{total_carbon:,.2f}")
+        st.markdown("#### Component Factors")
+        st.dataframe(db["factors"], use_container_width=True)
+        
+        st.markdown("#### Concrete Mix Designs")
+        st.dataframe(db["mixes"], use_container_width=True)
 
 if st.session_state.user_id is None:
     login_page()
