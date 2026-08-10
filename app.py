@@ -27,9 +27,13 @@ if "user_email" not in st.session_state:
     st.session_state.user_email = None
 
 def clean_df(df):
-    """Safely removes invisible spaces from Excel headers."""
+    """Safely removes invisible spaces from Excel headers AND text cells."""
     if isinstance(df, pd.DataFrame) and not df.empty:
+        # 1. Clean the headers
         df.columns = df.columns.str.strip()
+        # 2. Clean all text inside the cells to prevent matching crashes
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
     return df
 
 def safe_float(val, default=0.0):
@@ -178,74 +182,87 @@ def main_calculator():
                         chart_components_mass = {}
                         chart_components_carbon = {}
                         
-                        if not is_mix:
-                            direct_row = db["direct"][(db["direct"]["Category"] == selected_cat) & (db["direct"]["Material_Key"] == selected_mat)].iloc[0]
-                            for prop in final_props:
-                                if prop in direct_row and pd.notna(direct_row[prop]):
-                                    final_props[prop] = safe_float(direct_row[prop])
-                        else:
-                            mix_row = db["mixes"][(db["mixes"]["Category"] == selected_cat) & (db["mixes"]["Mix_Key"] == selected_mat)].iloc[0]
-                            factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
-                            total_mass = 0
-                            total_ec = 0
-                            total_gwp = 0
-                            
-                            for comp in factors_df.index:
-                                if comp in mix_row and pd.notna(mix_row[comp]):
-                                    mass = safe_float(mix_row[comp])
-                                    if mass > 0:
-                                        factor_row = factors_df.loc[comp]
-                                        comp_gwp = mass * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
-                                        
-                                        chart_components_mass[comp] = mass
-                                        chart_components_carbon[comp] = comp_gwp
-                                        
-                                        total_mass += mass
-                                        total_ec += mass * safe_float(factor_row.get('ECF_kgCO2_kg', 0))
-                                        total_gwp += comp_gwp
+                        try:
+                            if not is_mix:
+                                match_df = db["direct"][(db["direct"]["Category"] == selected_cat) & (db["direct"]["Material_Key"] == selected_mat)]
+                                if not match_df.empty:
+                                    direct_row = match_df.iloc[0]
+                                    for prop in final_props:
+                                        if prop in direct_row and pd.notna(direct_row[prop]):
+                                            final_props[prop] = safe_float(direct_row[prop])
+                                else:
+                                    st.error(f"Could not find exact data for '{selected_mat}'. Check your Excel file for typos.")
+                                    st.stop()
+                            else:
+                                match_df = db["mixes"][(db["mixes"]["Category"] == selected_cat) & (db["mixes"]["Mix_Key"] == selected_mat)]
+                                if not match_df.empty:
+                                    mix_row = match_df.iloc[0]
+                                    factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
+                                    total_mass = 0
+                                    total_ec = 0
+                                    total_gwp = 0
                                     
-                            if total_mass > 0:
-                                final_props["Total_Mass_kg_m3"] = total_mass
-                                final_props["EC_kgCO2_m3"] = total_ec
-                                final_props["GWP100_kgCO2e_m3"] = total_gwp
-                                final_props["ECF_kgCO2_kg"] = total_ec / total_mass
-                                final_props["ECFGWP100_kgCO2e_kg"] = total_gwp / total_mass
-                        
-                        st.markdown("---")
-                        st.markdown(f"**Properties for {selected_mat}**")
-                        
-                        m_col1, m_col2, m_col3 = st.columns(3)
-                        m_col1.metric("Total Mass", f"{final_props['Total_Mass_kg_m3']:,.2f} kg/m³")
-                        m_col2.metric("ECF", f"{final_props['ECF_kgCO2_kg']:,.3f} kgCO2/kg")
-                        m_col3.metric("GWP100 Factor", f"{final_props['ECFGWP100_kgCO2e_kg']:,.3f} kgCO2e/kg")
-                        
-                        m_col4, m_col5 = st.columns(2)
-                        m_col4.metric("Embodied Carbon", f"{final_props['EC_kgCO2_m3']:,.2f} kgCO2/m³")
-                        m_col5.metric("GWP100 Total", f"{final_props['GWP100_kgCO2e_m3']:,.2f} kgCO2e/m³")
-                        
-                        if is_mix and len(chart_components_mass) > 0:
-                            st.markdown("#### Mix Breakdown Analysis")
-                            pc_col1, pc_col2 = st.columns(2)
+                                    for comp in factors_df.index:
+                                        if comp in mix_row and pd.notna(mix_row[comp]):
+                                            mass = safe_float(mix_row[comp])
+                                            if mass > 0:
+                                                factor_row = factors_df.loc[comp]
+                                                comp_gwp = mass * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
+                                                
+                                                chart_components_mass[comp] = mass
+                                                chart_components_carbon[comp] = comp_gwp
+                                                
+                                                total_mass += mass
+                                                total_ec += mass * safe_float(factor_row.get('ECF_kgCO2_kg', 0))
+                                                total_gwp += comp_gwp
+                                            
+                                    if total_mass > 0:
+                                        final_props["Total_Mass_kg_m3"] = total_mass
+                                        final_props["EC_kgCO2_m3"] = total_ec
+                                        final_props["GWP100_kgCO2e_m3"] = total_gwp
+                                        final_props["ECF_kgCO2_kg"] = total_ec / total_mass
+                                        final_props["ECFGWP100_kgCO2e_kg"] = total_gwp / total_mass
+                                else:
+                                    st.error(f"Could not find exact data for mix '{selected_mat}'. Check your Excel file for typos.")
+                                    st.stop()
                             
-                            with pc_col1:
-                                st.markdown("**1. By Mass / Weight**")
-                                chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass": list(chart_components_mass.values())})
-                                pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
-                                    theta=alt.Theta(field="Mass", type="quantitative"),
-                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                    tooltip=["Component", "Mass"]
-                                ).properties(height=280)
-                                st.altair_chart(pie_mass, use_container_width=True)
+                            st.markdown("---")
+                            st.markdown(f"**Properties for {selected_mat}**")
+                            
+                            m_col1, m_col2, m_col3 = st.columns(3)
+                            m_col1.metric("Total Mass", f"{final_props['Total_Mass_kg_m3']:,.2f} kg/m³")
+                            m_col2.metric("ECF", f"{final_props['ECF_kgCO2_kg']:,.3f} kgCO2/kg")
+                            m_col3.metric("GWP100 Factor", f"{final_props['ECFGWP100_kgCO2e_kg']:,.3f} kgCO2e/kg")
+                            
+                            m_col4, m_col5 = st.columns(2)
+                            m_col4.metric("Embodied Carbon", f"{final_props['EC_kgCO2_m3']:,.2f} kgCO2/m³")
+                            m_col5.metric("GWP100 Total", f"{final_props['GWP100_kgCO2e_m3']:,.2f} kgCO2e/m³")
+                            
+                            if is_mix and len(chart_components_mass) > 0:
+                                st.markdown("#### Mix Breakdown Analysis")
+                                pc_col1, pc_col2 = st.columns(2)
                                 
-                            with pc_col2:
-                                st.markdown("**2. By Embodied Carbon**")
-                                chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
-                                pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
-                                    theta=alt.Theta(field="Carbon", type="quantitative"),
-                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                    tooltip=["Component", "Carbon"]
-                                ).properties(height=280)
-                                st.altair_chart(pie_carbon, use_container_width=True)
+                                with pc_col1:
+                                    st.markdown("**1. By Mass / Weight**")
+                                    chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass": list(chart_components_mass.values())})
+                                    pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
+                                        theta=alt.Theta(field="Mass", type="quantitative"),
+                                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                        tooltip=["Component", "Mass"]
+                                    ).properties(height=280)
+                                    st.altair_chart(pie_mass, use_container_width=True)
+                                    
+                                with pc_col2:
+                                    st.markdown("**2. By Embodied Carbon**")
+                                    chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
+                                    pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
+                                        theta=alt.Theta(field="Carbon", type="quantitative"),
+                                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                        tooltip=["Component", "Carbon"]
+                                    ).properties(height=280)
+                                    st.altair_chart(pie_carbon, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Calculation Error: Something went wrong while parsing the Excel data for this material. Details: {e}")
 
         elif mode == "Create Custom Mix":
             st.markdown("#### Design a Custom Mix")
