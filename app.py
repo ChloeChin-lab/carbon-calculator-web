@@ -122,7 +122,7 @@ def main_calculator():
     with tab1:
         st.markdown("### Materials Database")
         
-        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix"], horizontal=True)
+        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -234,7 +234,7 @@ def main_calculator():
             with c_col1:
                 custom_cat = st.selectbox("Assign to Category:", ["--- Select Category ---"] + all_categories, key="cust_cat")
             with c_col2:
-                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g., C40/50 30% PFA")
+                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g., C40/50 30% PFA", key="mix_name_input")
                 
             st.markdown("##### Ingredients (kg/m³)")
             
@@ -339,10 +339,36 @@ def main_calculator():
             for m in my_mixes:
                 with st.expander(f"⚙️ {m['mix_name']} (Category: {m['category']})"):
                     st.write("Ingredients:", m["components"])
-                    if st.button(f"Delete '{m['mix_name']}'", key=f"del_mix_{m['id']}"):
-                        supabase.table("user_mixes").delete().eq("id", m["id"]).execute()
-                        st.success("Mix deleted. Please refresh the page.")
-                        st.rerun()
+                    
+                    mix_id = m.get('id', str(m.get('mix_name')))
+                    
+                    btn_col_a, btn_col_b = st.columns(2)
+                    with btn_col_a:
+                        if st.button(f"📝 Load to Designer", key=f"load_mix_{mix_id}"):
+                            # 1. Switch the view mode to the Custom Mix tab
+                            st.session_state["mix_mode_radio"] = "Create Custom Mix"
+                            # 2. Pre-fill the Category and Name
+                            st.session_state["cust_cat"] = m["category"]
+                            st.session_state["mix_name_input"] = f"{m['mix_name']} (Copy)"
+                            
+                            # 3. Pre-fill all the ingredient numbers safely
+                            factors_df = db["factors"]
+                            if not factors_df.empty and "Component" in factors_df.columns:
+                                for c in factors_df["Component"].tolist():
+                                    # If the component was in the saved mix, load its value. Otherwise, set to 0.0
+                                    st.session_state[f"cust_comp_{c}"] = float(m["components"].get(c, 0.0))
+                            
+                            # Instantly refresh the page to show the filled-out form
+                            st.rerun()
+                            
+                    with btn_col_b:
+                        if st.button(f"🗑️ Delete '{m['mix_name']}'", key=f"del_mix_{mix_id}"):
+                            if 'id' in m:
+                                supabase.table("user_mixes").delete().eq("id", m["id"]).execute()
+                                st.success("Mix deleted. Please refresh the page.")
+                                st.rerun()
+                            else:
+                                st.error("Cannot delete: Your Supabase table is missing the 'id' column.")
         else:
             st.write("You have not saved any custom mix designs yet.")
 
@@ -462,10 +488,15 @@ def main_calculator():
             for p in user_projects:
                 with st.expander(f"📁 {p['project_name']} | Structure: {p['structure_type']} | Carbon: {p['total_embodied_carbon']:,.2f} kgCO2e"):
                     st.write("Component Details:", p["component_data"])
-                    if st.button(f"Delete '{p['project_name']}'", key=f"del_proj_{p['id']}"):
-                        supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
-                        st.success("Project deleted. Please refresh the page.")
-                        st.rerun()
+                    
+                    proj_id = p.get('id', str(p.get('project_name')))
+                    if st.button(f"Delete '{p['project_name']}'", key=f"del_proj_{proj_id}"):
+                        if 'id' in p:
+                            supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
+                            st.success("Project deleted. Please refresh the page.")
+                            st.rerun()
+                        else:
+                            st.error("Cannot delete: Your Supabase table is missing the 'id' column.")
         else:
             st.info("No projects saved under your account yet.")
 
