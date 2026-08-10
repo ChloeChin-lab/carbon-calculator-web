@@ -5,7 +5,6 @@ import os
 import requests
 from io import BytesIO
 import altair as alt
-import gc
 
 st.set_page_config(page_title="Carbon Calculator", layout="wide")
 
@@ -96,7 +95,7 @@ def load_database():
 # ==========================================
 def login_page():
     st.title("Embodied Carbon Calculator")
-    st.markdown("Please log in to access the engineering portal.")
+    st.markdown("Please log in to access the calculator.")
     
     email = st.text_input("Email", key="login_email")
     password = st.text_input("Password", type="password", key="login_password")
@@ -165,28 +164,27 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
 def main_calculator():
     db = load_database()
     
-    # Sidebar Navigation and Profile
-    st.sidebar.title("Engineering Portal")
+    # Sidebar Navigation
+    st.sidebar.title("Navigation")
     st.sidebar.markdown(f"**User:** {st.session_state.user_email}")
-    st.sidebar.markdown(f"**Database:** {st.session_state.get('db_status', 'Checking...')}")
+    st.sidebar.markdown(f"**Status:** {st.session_state.get('db_status', 'Checking...')}")
     
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**Main Menu**")
     
-    nav_selection = st.sidebar.radio("Navigation", [
-        "Welcome Dashboard", 
-        "Materials & Mix Designer", 
+    nav_selection = st.sidebar.radio("Go to:", [
+        "Welcome", 
+        "Materials & Mixes", 
         "Project Calculator", 
-        "Project Library"
-    ], label_visibility="collapsed")
+        "Saved Projects"
+    ])
     
     st.sidebar.markdown("---")
-    if st.sidebar.button("Secure Log Out"):
+    if st.sidebar.button("Log Out"):
         st.session_state.user_id = None
         st.rerun()
 
     if db is None:
-        st.error("System Error: Cannot initialize calculator. Database connection failed.")
+        st.error("System Error: Cannot initialise calculator. Database connection failed.")
         st.stop()
         
     # Pre-fetch user mixes
@@ -201,28 +199,28 @@ def main_calculator():
     # ---------------------------------------------------------
     # PAGE 1: WELCOME DASHBOARD
     # ---------------------------------------------------------
-    if nav_selection == "Welcome Dashboard":
+    if nav_selection == "Welcome":
         st.markdown("## Embodied Carbon Calculator")
-        st.markdown("Welcome to the enterprise embodied carbon management platform. Select a module from the left navigation panel to begin.")
+        st.markdown("Please select a module from the left navigation menu to begin.")
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown("### Materials & Mix Designer")
-            st.markdown("Review standard material specifications synchronized from the central engineering database, or engineer custom mix designs to calculate immediate environmental impact profiles.")
+            st.markdown("### Materials & Mixes")
+            st.markdown("Review standard material properties from the database, or create custom mix designs to calculate their carbon footprint.")
         with col2:
             st.markdown("### Project Calculator")
-            st.markdown("Assign standard and custom material mixes to specific structural components to generate total carbon footprint reports for upcoming projects.")
+            st.markdown("Assign materials to structural components to calculate the total embodied carbon of your construction projects.")
         with col3:
-            st.markdown("### Project Library")
-            st.markdown("Access, review, and manage the portfolio of previously calculated and saved project structures.")
+            st.markdown("### Saved Projects")
+            st.markdown("Access, review, and manage your previously saved construction projects.")
 
     # ---------------------------------------------------------
     # PAGE 2: MATERIALS REFERENCE & CUSTOM MIX CREATOR
     # ---------------------------------------------------------
-    elif nav_selection == "Materials & Mix Designer":
+    elif nav_selection == "Materials & Mixes":
         st.markdown("### Materials Database")
         
-        mode = st.radio("Select Module:", ["View Standard Materials", "Create Custom Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
+        mode = st.radio("Select Action:", ["View Standard Materials", "Create Custom Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -231,11 +229,10 @@ def main_calculator():
         # --- SUB-MODULE: VIEW MATERIALS ---
         if mode == "View Standard Materials":
             st.markdown("#### Standard Material Properties")
-            st.info("These materials are synchronized from the central engineering database and cannot be altered.")
             
             col_sel1, col_sel2 = st.columns(2)
             with col_sel1:
-                selected_cat = st.selectbox("Material Category:", ["--- Select Category ---"] + all_categories, key="view_cat")
+                selected_cat = st.selectbox("Category:", ["--- Select Category ---"] + all_categories, key="view_cat")
             
             if selected_cat != "--- Select Category ---":
                 mix_mats = db["mixes"][db["mixes"]["Category"] == selected_cat]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
@@ -243,7 +240,7 @@ def main_calculator():
                 all_mats = sorted(list(set(mix_mats + direct_mats)))
                 
                 with col_sel2:
-                    selected_mat = st.selectbox("Material Type/Grade:", ["--- Select Material ---"] + all_mats, key="view_mat")
+                    selected_mat = st.selectbox("Material:", ["--- Select Material ---"] + all_mats, key="view_mat")
                 
                 if selected_mat != "--- Select Material ---":
                     if st.button("View Material Properties", type="primary"):
@@ -264,10 +261,10 @@ def main_calculator():
                                 if not match_df.empty:
                                     direct_row = match_df.iloc[0]
                                     for prop in final_props:
-                                        if prop in direct_row and pd.notna(direct_row[prop]):
+                                        if prop in direct_row.index and pd.notna(direct_row[prop]):
                                             final_props[prop] = safe_float(direct_row[prop])
                                 else:
-                                    st.error(f"Data not found for '{selected_mat}'.")
+                                    st.error("Data not found for this material.")
                                     st.stop()
                             else:
                                 match_df = db["mixes"][(db["mixes"]["Category"] == selected_cat) & (db["mixes"]["Mix_Key"] == selected_mat)]
@@ -278,7 +275,7 @@ def main_calculator():
                                     total_gwp = 0
                                     
                                     for comp in factors_df.index:
-                                        if comp in mix_row and pd.notna(mix_row[comp]):
+                                        if comp in mix_row.index and pd.notna(mix_row[comp]):
                                             mass = safe_float(mix_row[comp])
                                             if mass > 0:
                                                 factor_row = factors_df.loc[comp]
@@ -298,11 +295,11 @@ def main_calculator():
                                         final_props["ECF_kgCO2_kg"] = total_ec / total_mass
                                         final_props["ECFGWP100_kgCO2e_kg"] = total_gwp / total_mass
                                 else:
-                                    st.error(f"Data not found for mix '{selected_mat}'.")
+                                    st.error("Data not found for this mix.")
                                     st.stop()
                             
                             st.markdown("---")
-                            st.markdown(f"**Calculated Profile: {selected_mat}**")
+                            st.markdown(f"**Properties: {selected_mat}**")
                             
                             m_col1, m_col2, m_col3 = st.columns(3)
                             m_col1.metric("Total Mass", f"{final_props['Total_Mass_kg_m3']:,.2f} kg/m³")
@@ -318,7 +315,7 @@ def main_calculator():
                                 pc_col1, pc_col2 = st.columns(2)
                                 
                                 with pc_col1:
-                                    st.markdown("**1. By Mass / Weight**")
+                                    st.markdown("**1. By Mass (kg)**")
                                     chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass": list(chart_components_mass.values())})
                                     pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
                                         theta=alt.Theta(field="Mass", type="quantitative"),
@@ -328,7 +325,7 @@ def main_calculator():
                                     st.altair_chart(pie_mass, use_container_width=True)
                                     
                                 with pc_col2:
-                                    st.markdown("**2. By Embodied Carbon**")
+                                    st.markdown("**2. By Embodied Carbon (kgCO2e)**")
                                     chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
                                     pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
                                         theta=alt.Theta(field="Carbon", type="quantitative"),
@@ -337,7 +334,7 @@ def main_calculator():
                                     ).properties(height=280)
                                     st.altair_chart(pie_carbon, use_container_width=True)
                         except Exception as e:
-                            st.error(f"Processing Error: Failed to parse matrix data. System details: {e}")
+                            st.error(f"Error reading database: {str(e)}. Please check the Excel file formatting.")
 
         # --- SUB-MODULE: CUSTOM MIX DESIGNER ---
         elif mode == "Create Custom Mix":
@@ -345,24 +342,24 @@ def main_calculator():
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
-                custom_cat = st.selectbox("Category Assignment:", ["--- Select Category ---"] + all_categories, key="cust_cat")
+                custom_cat = st.selectbox("Category:", ["--- Select Category ---"] + all_categories, key="cust_cat")
             with c_col2:
-                custom_mix_name = st.text_input("Mix Nomenclature:", placeholder="e.g., C40/50", key="mix_name_input")
+                custom_mix_name = st.text_input("Name:", placeholder="e.g. C40/50", key="mix_name_input")
             
             st.markdown("---")
-            st.markdown("##### 1. Choose Input Units")
-            unit_mode = st.radio("Select data entry format:", 
+            st.markdown("##### 1. Data Entry Format")
+            unit_mode = st.radio("Format:", 
                                  ["Standard (kg/m³)", "Total Batch Weight (kg)", "US Imperial (lb/yd³)"], 
-                                 horizontal=True)
+                                 horizontal=True, label_visibility="collapsed")
             
             batch_vol = 1.0
             if unit_mode == "Total Batch Weight (kg)":
-                batch_vol = st.number_input("Specify total batch volume (m³):", min_value=0.1, value=1.0, step=0.1)
-                st.info(f"System will normalize inputs by dividing by {batch_vol} to calculate kg/m³.")
+                batch_vol = st.number_input("Total batch volume (m³):", min_value=0.1, value=1.0, step=0.1)
+                st.info(f"System will divide inputs by {batch_vol} to calculate kg/m³.")
             elif unit_mode == "US Imperial (lb/yd³)":
-                st.info("System will apply standard conversion factor to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
+                st.info("System will convert inputs to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
                 
-            st.markdown("##### 2. Ingredients")
+            st.markdown("##### 2. Standard Materials")
             
             if not factors_df.empty:
                 all_comps = factors_df.index.tolist()
@@ -377,8 +374,8 @@ def main_calculator():
                 if val > 0:
                     raw_input_data[comp] = val
                     
-            st.markdown("##### 3. Add Missing/Custom Ingredients")
-            st.markdown("Append any unique materials not present in the standard database matrix. To delete a row, click the checkbox on the far left to highlight it, and press the Delete key.")
+            st.markdown("##### 3. Additional Materials")
+            st.write("To delete a row, click the grey box on the far left of the row to highlight it, then press the Delete key.")
             
             if "adhoc_mats" not in st.session_state:
                 st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)", "ECF (kgCO2/kg)"])
@@ -395,7 +392,7 @@ def main_calculator():
             with btn_col1:
                 preview_mix = st.button("Preview Mix Properties", type="primary")
             with btn_col2:
-                save_mix = st.button("Save Custom Mix to Account")
+                save_mix = st.button("Save Mix")
                 
             # Perform Unit Conversions
             custom_mix_data = {}
@@ -457,11 +454,11 @@ def main_calculator():
                 r_col3.metric("GWP100 Factor", f"{(total_gwp / total_mass):,.3f} kgCO2e/kg" if total_mass > 0 else "0")
                 r_col4.metric("GWP100 Total", f"{total_gwp:,.2f} kgCO2e/m³")
                 
-                st.markdown("##### Composition Breakdown")
+                st.markdown("##### Composition")
                 c_pc_col1, c_pc_col2 = st.columns(2)
                 
                 with c_pc_col1:
-                    st.markdown("**1. By Mass / Weight**")
+                    st.markdown("**1. By Mass**")
                     c_data_mass = pd.DataFrame(c_data_mass_list)
                     c_pie_mass = alt.Chart(c_data_mass).mark_arc(innerRadius=40).encode(
                         theta=alt.Theta(field="Mass", type="quantitative"),
@@ -482,15 +479,15 @@ def main_calculator():
             
             if save_mix:
                 if custom_cat == "--- Select Category ---":
-                    st.error("Category assignment required before saving.")
+                    st.error("Category selection is required.")
                 elif not custom_mix_name:
-                    st.error("Professional nomenclature required for custom mix recording.")
+                    st.error("Name is required.")
                 elif len(custom_mix_data) == 0 and len(valid_adhoc) == 0:
-                    st.error("At least one structural ingredient is required.")
+                    st.error("At least one ingredient is required.")
                 else:
                     existing_duplicate = [m for m in user_mixes if m['mix_name'] == custom_mix_name and m['category'] == custom_cat]
                     if len(existing_duplicate) > 0:
-                        st.error(f"Duplicate constraint: A mix named '{custom_mix_name}' already exists in category '{custom_cat}'. Please assign a distinct identifier.")
+                        st.error("A mix with this name already exists in this category.")
                     else:
                         mix_payload = {
                             "user_id": st.session_state.user_id,
@@ -501,17 +498,15 @@ def main_calculator():
                         }
                         try:
                             supabase.table("user_mixes").insert(mix_payload).execute()
-                            st.success(f"Custom mix specification '{custom_mix_name}' successfully committed to database.")
-                            st.rerun() 
+                            st.success("Mix saved successfully.")
                         except Exception as e:
-                            st.error(f"Database insertion failed. Error details: {str(e)}")
+                            st.error(f"Database error: {str(e)}")
 
         # --- SUB-MODULE: COMPARE MIXES ---
         elif mode == "Compare Mixes":
             st.markdown("#### Compare Mix Designs")
-            st.markdown("Evaluate multiple standard or custom mixes to compare their environmental impact profiles.")
             
-            selected_to_compare = st.multiselect("Select Mixes for Evaluation:", all_available_mixes)
+            selected_to_compare = st.multiselect("Select Mixes:", all_available_mixes)
             
             if len(selected_to_compare) > 0:
                 comparison_data = []
@@ -525,7 +520,7 @@ def main_calculator():
                 chart_col1, chart_col2 = st.columns(2)
                 
                 with chart_col1:
-                    st.markdown("**Embodied Carbon Comparison (GWP100 Total)**")
+                    st.markdown("**Embodied Carbon Comparison**")
                     bar_gwp = alt.Chart(comp_df).mark_bar().encode(
                         x=alt.X('Mix', sort='-y', title="Mix Name"),
                         y=alt.Y('Carbon (kgCO2e/m3)', title="Total kgCO2e/m³"),
@@ -535,38 +530,30 @@ def main_calculator():
                     st.altair_chart(bar_gwp, use_container_width=True)
                     
                 with chart_col2:
-                    st.markdown("**Mass vs Carbon Factor (Efficiency)**")
+                    st.markdown("**Efficiency Chart**")
                     scatter_eff = alt.Chart(comp_df).mark_circle(size=200).encode(
-                        x=alt.X('Mass (kg/m3)', title="Total Mass (kg/m³)"),
-                        y=alt.Y('Factor (kgCO2e/kg)', title="Carbon Factor (kgCO2e/kg)"),
+                        x=alt.X('Mass (kg/m3)', title="Total Mass (kg/m³)", scale=alt.Scale(zero=False)),
+                        y=alt.Y('Factor (kgCO2e/kg)', title="Carbon Factor (kgCO2e/kg)", scale=alt.Scale(zero=False)),
                         color=alt.Color('Mix', legend=alt.Legend(orient="bottom")),
                         tooltip=['Mix', alt.Tooltip('Mass (kg/m3)', format='.2f'), alt.Tooltip('Factor (kgCO2e/kg)', format='.3f')]
                     ).properties(height=300)
                     st.altair_chart(scatter_eff, use_container_width=True)
-                    
-                    st.info("How to interpret this scatter plot: This chart visualizes the 'Carbon Efficiency' of each mix relative to its weight. Mixes positioned lower on the vertical axis generate less carbon per kilogram of material used. An optimized, sustainable mix will appear as low as possible on the graph.")
+                    st.info("How to read this chart: The lowest carbon option will appear nearest the bottom of the chart. The lightest option will appear furthest to the left.")
                 
                 if len(comp_df) > 1:
                     lowest_carbon_mix = comp_df.loc[comp_df['Carbon (kgCO2e/m3)'].idxmin()]
-                    highest_carbon_mix = comp_df.loc[comp_df['Carbon (kgCO2e/m3)'].idxmax()]
-                    lowest_mass_mix = comp_df.loc[comp_df['Mass (kg/m3)'].idxmin()]
-                    
-                    st.success(f"**Analytical Conclusion:** The optimal sustainable choice is **{lowest_carbon_mix['Mix']}**, exhibiting the lowest aggregate embodied carbon ({lowest_carbon_mix['Carbon (kgCO2e/m3)']:,.2f} kgCO2e/m³).")
-                    
-                    diff_percent = ((highest_carbon_mix['Carbon (kgCO2e/m3)'] - lowest_carbon_mix['Carbon (kgCO2e/m3)']) / highest_carbon_mix['Carbon (kgCO2e/m3)']) * 100
-                    if diff_percent > 0:
-                        st.markdown(f"Substituting **{highest_carbon_mix['Mix']}** with **{lowest_carbon_mix['Mix']}** yields an environmental saving of **{diff_percent:.1f}%** in carbon emissions per cubic meter.")
+                    st.success(f"Conclusion: **{lowest_carbon_mix['Mix']}** is the lowest carbon option ({lowest_carbon_mix['Carbon (kgCO2e/m3)']:,.2f} kgCO2e/m³).")
 
         # --- SUB-MODULE: SAVED MIX LIBRARY ---
         st.markdown("---")
-        st.markdown("#### Custom Mix Library")
+        st.markdown("#### Saved Custom Mixes")
 
         if user_mixes:
             for m in user_mixes:
                 with st.expander(f"{m['mix_name']} (Category: {m['category']})"):
-                    st.write("Standard Components:", m["components"])
+                    st.write("Standard Materials:", m["components"])
                     if "adhoc_materials" in m and m["adhoc_materials"]:
-                        st.write("Custom Components:", m["adhoc_materials"])
+                        st.write("Additional Materials:", m["adhoc_materials"])
                     
                     mix_id = m.get('id', str(m.get('mix_name')))
                     del_key = f"del_mix_confirm_{mix_id}"
@@ -592,28 +579,27 @@ def main_calculator():
                                 if 'id' in m:
                                     supabase.table("user_mixes").delete().eq("id", m["id"]).execute()
                                     st.session_state[del_key] = False
-                                    st.success("Mix deleted successfully.")
                                     st.rerun()
                                 else:
-                                    st.error("Deletion failed: Missing 'id' primary key in Supabase schema.")
+                                    st.error("Database ID missing.")
                             if n_col.button("Cancel", key=f"btn_del_no_{mix_id}"):
                                 st.session_state[del_key] = False
                                 st.rerun()
         else:
-            st.write("No custom mix designs found in current library.")
+            st.write("No custom mixes found.")
 
     # ---------------------------------------------------------
     # PAGE 3: PROJECT CALCULATOR 
     # ---------------------------------------------------------
     elif nav_selection == "Project Calculator":
-        st.markdown("### 1. Project Specifications")
-        project_name = st.text_input("Project Nomenclature:")
+        st.markdown("### Project Configuration")
+        project_name = st.text_input("Project Name:")
         
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
-        selected_structure = st.selectbox("Designate Project Structure:", ["---"] + structure_options)
+        selected_structure = st.selectbox("Select Structure:", ["---"] + structure_options)
 
         if selected_structure != "---":
-            st.markdown("### 2. Structural Component Allocation")
+            st.markdown("### Component Allocation")
             
             components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
             component_list = [c.strip() for c in components_str.split(",")]
@@ -621,23 +607,23 @@ def main_calculator():
             project_data = {}
             
             for comp in component_list:
-                st.markdown(f"**Component: {comp}**")
+                st.markdown(f"**{comp}**")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    quantity = st.number_input(f"Quantity ({comp}):", min_value=0.0, step=1.0, key=f"qty_{comp}")
+                    quantity = st.number_input(f"Quantity", min_value=0.0, step=1.0, key=f"qty_{comp}")
                 with col2:
                     selected_unit = "m3"
                     if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                         unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp]
                         if not unit_row.empty and "Unit_Options" in unit_row.columns:
                             units = str(unit_row["Unit_Options"].values[0]).split(",")
-                            selected_unit = st.selectbox("Unit:", units, key=f"unit_{comp}")
+                            selected_unit = st.selectbox("Unit", units, key=f"unit_{comp}")
                         else:
                             st.write("Unit: m3")
                     else:
                         st.write("Unit: m3")
                 with col3:
-                    assigned_mix = st.selectbox(f"Material Assignment:", ["--- Select ---"] + all_available_mixes, key=f"mix_{comp}")
+                    assigned_mix = st.selectbox(f"Material", ["--- Select ---"] + all_available_mixes, key=f"mix_{comp}")
                 
                 project_data[comp] = {
                     "quantity": quantity, 
@@ -646,11 +632,11 @@ def main_calculator():
                 }
                 st.markdown("---")
             
-            if st.button("Calculate & Store Project Data", type="primary"):
+            if st.button("Calculate and Save", type="primary"):
                 if not project_name:
-                    st.error("Project nomenclature required before committing to database.")
+                    st.error("Project Name is required.")
                 else:
-                    with st.spinner("Processing structural mathematics..."):
+                    with st.spinner("Calculating..."):
                         total_carbon = 0
 
                         for comp, details in project_data.items():
@@ -674,30 +660,30 @@ def main_calculator():
                         
                         try:
                             supabase.table("saved_projects").insert(project_payload).execute()
-                            st.success(f"Structural data for '{project_name}' successfully committed.")
+                            st.success("Project saved.")
                             st.metric(label="Total Embodied Carbon (kgCO2e)", value=f"{total_carbon:,.2f}")
                         except Exception as e:
-                            st.error(f"Database insertion failed. System details: {str(e)}")
+                            st.error(f"Database error: {str(e)}")
 
     # ---------------------------------------------------------
-    # PAGE 4: PROJECT LIBRARY
+    # PAGE 4: SAVED PROJECTS
     # ---------------------------------------------------------
-    elif nav_selection == "Project Library":
-        st.markdown("### Project Portfolio Library")
+    elif nav_selection == "Saved Projects":
+        st.markdown("### Saved Projects")
         
         projects_res = supabase.table("saved_projects").select("*").eq("user_id", st.session_state.user_id).execute()
         user_projects = projects_res.data if projects_res.data else []
         
         if user_projects:
             for p in user_projects:
-                with st.expander(f"{p['project_name']} | Structure: {p['structure_type']} | Carbon: {p['total_embodied_carbon']:,.2f} kgCO2e"):
-                    st.write("Component Details:", p["component_data"])
+                with st.expander(f"{p['project_name']} | Structure: {p['structure_type']} | Total Carbon: {p['total_embodied_carbon']:,.2f} kgCO2e"):
+                    st.write("Components:", p["component_data"])
                     
                     proj_id = p.get('id', str(p.get('project_name')))
                     del_key = f"del_proj_confirm_{proj_id}"
                     
                     if not st.session_state.get(del_key, False):
-                        if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
+                        if st.button("Delete", key=f"btn_del_init_proj_{proj_id}"):
                             st.session_state[del_key] = True
                             st.rerun()
                     else:
@@ -707,15 +693,14 @@ def main_calculator():
                             if 'id' in p:
                                 supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
                                 st.session_state[del_key] = False
-                                st.success("Project deleted.")
                                 st.rerun()
                             else:
-                                st.error("Deletion failed: Missing 'id' primary key in Supabase schema.")
+                                st.error("Database ID missing.")
                         if n_col.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
                             st.session_state[del_key] = False
                             st.rerun()
         else:
-            st.info("No projects found in current portfolio library.")
+            st.info("No projects found.")
 
 if st.session_state.user_id is None:
     login_page()
