@@ -6,7 +6,6 @@ import requests
 from io import BytesIO
 import altair as alt
 
-# Force a clean, wide layout
 st.set_page_config(page_title="Carbon Calculator", page_icon="🏢", layout="wide")
 
 # ==========================================
@@ -27,15 +26,28 @@ if "user_id" not in st.session_state:
 if "user_email" not in st.session_state:
     st.session_state.user_email = None
 
+def clean_df(df):
+    """Safely removes invisible spaces from Excel headers."""
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        df.columns = df.columns.str.strip()
+    return df
+
+def safe_float(val, default=0.0):
+    """Safely handles N/A, dashes, or blanks in Excel cells without crashing."""
+    if pd.isna(val):
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
 # ==========================================
 # 2. FETCH DATA SAFELY (RAM OPTIMISED)
 # ==========================================
 @st.cache_data(ttl=3600) 
 def load_database():
-    # We strictly request ONLY these 5 tabs to prevent RAM overload
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
     
-    # 1. Try Google Sheets First
     if SHEET_ID and len(SHEET_ID) > 20: 
         export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
         try:
@@ -47,37 +59,33 @@ def load_database():
             st.session_state.db_status = "Connected to Google Sheets"
             
             return {
-                "factors": xls.get("Component_Factors", pd.DataFrame()),
-                "mixes": xls.get("Mix_Designs", pd.DataFrame()),
-                "structures": xls.get("Project_Structures", pd.DataFrame()),
-                "unit_logic": xls.get("Unit_Logic", pd.DataFrame()),
-                "direct": xls.get("Direct_Results", pd.DataFrame())
+                "factors": clean_df(xls.get("Component_Factors", pd.DataFrame())),
+                "mixes": clean_df(xls.get("Mix_Designs", pd.DataFrame())),
+                "structures": clean_df(xls.get("Project_Structures", pd.DataFrame())),
+                "unit_logic": clean_df(xls.get("Unit_Logic", pd.DataFrame())),
+                "direct": clean_df(xls.get("Direct_Results", pd.DataFrame()))
             }
         except Exception as e:
             st.session_state.db_status = f"Google Sheets Error: {e}"
             pass 
 
-    # 2. Fallback to Local File
     local_path = "materials_database.xlsx"
     if os.path.exists(local_path):
         try:
             xls = pd.read_excel(local_path, sheet_name=required_sheets)
             st.session_state.db_status = "Using Local Excel File"
             return {
-                "factors": xls.get("Component_Factors", pd.DataFrame()),
-                "mixes": xls.get("Mix_Designs", pd.DataFrame()),
-                "structures": xls.get("Project_Structures", pd.DataFrame()),
-                "unit_logic": xls.get("Unit_Logic", pd.DataFrame()),
-                "direct": xls.get("Direct_Results", pd.DataFrame())
+                "factors": clean_df(xls.get("Component_Factors", pd.DataFrame())),
+                "mixes": clean_df(xls.get("Mix_Designs", pd.DataFrame())),
+                "structures": clean_df(xls.get("Project_Structures", pd.DataFrame())),
+                "unit_logic": clean_df(xls.get("Unit_Logic", pd.DataFrame())),
+                "direct": clean_df(xls.get("Direct_Results", pd.DataFrame()))
             }
         except Exception as e:
             st.session_state.db_status = f"Local File Error: {e}"
             return None
             
     st.session_state.db_status = "No Database Found"
-    return None
-            
-    st.session_state.db_status = "🔴 No Database Found"
     return None
 
 # ==========================================
@@ -101,6 +109,16 @@ def login_page():
 # ==========================================
 # 4. MAIN CALCULATOR UI
 # ==========================================
+def load_mix_to_session(mix_data, factors_dataframe):
+    """Callback to safely inject data for the Edit button."""
+    st.session_state["mix_mode_radio"] = "Create Custom Mix"
+    st.session_state["cust_cat"] = mix_data["category"]
+    st.session_state["mix_name_input"] = f"{mix_data['mix_name']} (Copy)"
+    
+    if not factors_dataframe.empty and "Component" in factors_dataframe.columns:
+        for c in factors_dataframe["Component"].tolist():
+            st.session_state[f"cust_comp_{c}"] = safe_float(mix_data["components"].get(c, 0.0))
+
 def main_calculator():
     db = load_database()
     
@@ -148,7 +166,6 @@ def main_calculator():
                     selected_mat = st.selectbox("Material Type/Grade:", ["--- Select Material ---"] + all_mats, key="view_mat")
                 
                 if selected_mat != "--- Select Material ---":
-                    # TRAFFIC COP BUTTON ADDED HERE TO PREVENT RAM CRASHES
                     if st.button("View Material Properties", type="primary"):
                         is_mix = selected_mat in mix_mats
                         
@@ -165,26 +182,27 @@ def main_calculator():
                             direct_row = db["direct"][(db["direct"]["Category"] == selected_cat) & (db["direct"]["Material_Key"] == selected_mat)].iloc[0]
                             for prop in final_props:
                                 if prop in direct_row and pd.notna(direct_row[prop]):
-                                    final_props[prop] = float(direct_row[prop])
+                                    final_props[prop] = safe_float(direct_row[prop])
                         else:
                             mix_row = db["mixes"][(db["mixes"]["Category"] == selected_cat) & (db["mixes"]["Mix_Key"] == selected_mat)].iloc[0]
-                            factors_df = db["factors"].set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
+                            factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
                             total_mass = 0
                             total_ec = 0
                             total_gwp = 0
                             
                             for comp in factors_df.index:
-                                if comp in mix_row and pd.notna(mix_row[comp]) and float(mix_row[comp]) > 0:
-                                    mass = float(mix_row[comp])
-                                    factor_row = factors_df.loc[comp]
-                                    comp_gwp = mass * float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
-                                    
-                                    chart_components_mass[comp] = mass
-                                    chart_components_carbon[comp] = comp_gwp
-                                    
-                                    total_mass += mass
-                                    total_ec += mass * float(factor_row.get('ECF_kgCO2_kg', 0))
-                                    total_gwp += comp_gwp
+                                if comp in mix_row and pd.notna(mix_row[comp]):
+                                    mass = safe_float(mix_row[comp])
+                                    if mass > 0:
+                                        factor_row = factors_df.loc[comp]
+                                        comp_gwp = mass * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
+                                        
+                                        chart_components_mass[comp] = mass
+                                        chart_components_carbon[comp] = comp_gwp
+                                        
+                                        total_mass += mass
+                                        total_ec += mass * safe_float(factor_row.get('ECF_kgCO2_kg', 0))
+                                        total_gwp += comp_gwp
                                     
                             if total_mass > 0:
                                 final_props["Total_Mass_kg_m3"] = total_mass
@@ -210,22 +228,22 @@ def main_calculator():
                             pc_col1, pc_col2 = st.columns(2)
                             
                             with pc_col1:
-                                st.markdown("**1. By Mass / Weight (kg)**")
-                                chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass (kg)": list(chart_components_mass.values())})
+                                st.markdown("**1. By Mass / Weight**")
+                                chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass": list(chart_components_mass.values())})
                                 pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
-                                    theta=alt.Theta(field="Mass (kg)", type="quantitative"),
+                                    theta=alt.Theta(field="Mass", type="quantitative"),
                                     color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                    tooltip=["Component", "Mass (kg)"]
+                                    tooltip=["Component", "Mass"]
                                 ).properties(height=280)
                                 st.altair_chart(pie_mass, use_container_width=True)
                                 
                             with pc_col2:
-                                st.markdown("**2. By Embodied Carbon (kgCO2e)**")
-                                chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon (kgCO2e)": list(chart_components_carbon.values())})
+                                st.markdown("**2. By Embodied Carbon**")
+                                chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
                                 pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
-                                    theta=alt.Theta(field="Carbon (kgCO2e)", type="quantitative"),
+                                    theta=alt.Theta(field="Carbon", type="quantitative"),
                                     color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                    tooltip=["Component", "Carbon (kgCO2e)"]
+                                    tooltip=["Component", "Carbon"]
                                 ).properties(height=280)
                                 st.altair_chart(pie_carbon, use_container_width=True)
 
@@ -241,12 +259,11 @@ def main_calculator():
                 
             st.markdown("##### Ingredients (kg/m³)")
             
-            factors_df = db["factors"]
-            if not factors_df.empty and "Component" in factors_df.columns:
+            factors_df = db["factors"].drop_duplicates(subset=["Component"]) if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
+            if not factors_df.empty:
                 factors_df = factors_df.set_index("Component")
                 all_comps = factors_df.index.tolist()
             else:
-                factors_df = pd.DataFrame()
                 all_comps = []
             
             custom_mix_data = {}
@@ -264,7 +281,6 @@ def main_calculator():
             with btn_col2:
                 save_mix = st.button("Save Custom Mix to Account")
                 
-            # TRAFFIC COP: Only calculate and draw charts if the Preview button is clicked
             if preview_mix and len(custom_mix_data) > 0:
                 total_mass = sum(custom_mix_data.values())
                 total_ec = 0
@@ -275,10 +291,10 @@ def main_calculator():
                 for comp, mass in custom_mix_data.items():
                     if comp in factors_df.index:
                         factor_row = factors_df.loc[comp]
-                        comp_gwp = mass * float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
+                        comp_gwp = mass * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
                         custom_mix_carbon[comp] = comp_gwp
                         
-                        total_ec += mass * float(factor_row.get('ECF_kgCO2_kg', 0))
+                        total_ec += mass * safe_float(factor_row.get('ECF_kgCO2_kg', 0))
                         total_gwp += comp_gwp
                 
                 st.markdown("##### Live Properties")
@@ -292,26 +308,25 @@ def main_calculator():
                 c_pc_col1, c_pc_col2 = st.columns(2)
                 
                 with c_pc_col1:
-                    st.markdown("**1. By Mass / Weight (kg)**")
-                    c_data_mass = pd.DataFrame({"Component": list(custom_mix_data.keys()), "Mass (kg)": list(custom_mix_data.values())})
+                    st.markdown("**1. By Mass / Weight**")
+                    c_data_mass = pd.DataFrame({"Component": list(custom_mix_data.keys()), "Mass": list(custom_mix_data.values())})
                     c_pie_mass = alt.Chart(c_data_mass).mark_arc(innerRadius=40).encode(
-                        theta=alt.Theta(field="Mass (kg)", type="quantitative"),
+                        theta=alt.Theta(field="Mass", type="quantitative"),
                         color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                        tooltip=["Component", "Mass (kg)"]
+                        tooltip=["Component", "Mass"]
                     ).properties(height=280)
                     st.altair_chart(c_pie_mass, use_container_width=True)
                     
                 with c_pc_col2:
-                    st.markdown("**2. By Embodied Carbon (kgCO2e)**")
-                    c_data_carbon = pd.DataFrame({"Component": list(custom_mix_carbon.keys()), "Carbon (kgCO2e)": list(custom_mix_carbon.values())})
+                    st.markdown("**2. By Embodied Carbon**")
+                    c_data_carbon = pd.DataFrame({"Component": list(custom_mix_carbon.keys()), "Carbon": list(custom_mix_carbon.values())})
                     c_pie_carbon = alt.Chart(c_data_carbon).mark_arc(innerRadius=40).encode(
-                        theta=alt.Theta(field="Carbon (kgCO2e)", type="quantitative"),
+                        theta=alt.Theta(field="Carbon", type="quantitative"),
                         color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                        tooltip=["Component", "Carbon (kgCO2e)"]
+                        tooltip=["Component", "Carbon"]
                     ).properties(height=280)
                     st.altair_chart(c_pie_carbon, use_container_width=True)
             
-            # SAVING LOGIC SEPARATED
             if save_mix:
                 if custom_cat == "--- Select Category ---":
                     st.error("Please assign a category before saving.")
@@ -332,21 +347,10 @@ def main_calculator():
                     except Exception as e:
                         st.error("Failed to save mix. Please check your database connection.")
 
-        # --- MANAGE SAVED MIXES ---
         st.markdown("---")
         st.markdown("#### Your Saved Custom Mixes")
         user_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
         my_mixes = user_mixes_res.data if user_mixes_res.data else []
-        
-        # Callback function to safely inject data before Streamlit renders the widgets
-        def load_mix_to_session(mix_data, factors_dataframe):
-            st.session_state["mix_mode_radio"] = "Create Custom Mix"
-            st.session_state["cust_cat"] = mix_data["category"]
-            st.session_state["mix_name_input"] = f"{mix_data['mix_name']} (Copy)"
-            
-            if not factors_dataframe.empty and "Component" in factors_dataframe.columns:
-                for c in factors_dataframe["Component"].tolist():
-                    st.session_state[f"cust_comp_{c}"] = float(mix_data["components"].get(c, 0.0))
 
         if my_mixes:
             for m in my_mixes:
@@ -432,7 +436,7 @@ def main_calculator():
                 else:
                     with st.spinner("Processing calculations securely..."):
                         total_carbon = 0
-                        factors_df = db["factors"].set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
+                        factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
                         for comp, details in project_data.items():
                             qty = details["quantity"]
@@ -447,7 +451,7 @@ def main_calculator():
                                     m_gwp = 0
                                     for c_name, c_val in match_mix["components"].items():
                                         if c_name in factors_df.index:
-                                            m_gwp += c_val * float(factors_df.loc[c_name].get('ECFGWP100_kgCO2e_kg', 0))
+                                            m_gwp += safe_float(c_val) * safe_float(factors_df.loc[c_name].get('ECFGWP100_kgCO2e_kg', 0))
                                     if m_mass > 0:
                                         comp_carbon_rate = m_gwp / m_mass
                             elif mix in standard_mixes:
@@ -456,9 +460,9 @@ def main_calculator():
                                 m_gwp = 0
                                 for comp_factor in factors_df.index:
                                     if comp_factor in mix_row and pd.notna(mix_row[comp_factor]):
-                                        val = float(mix_row[comp_factor])
+                                        val = safe_float(mix_row[comp_factor])
                                         m_mass += val
-                                        m_gwp += val * float(factors_df.loc[comp_factor].get('ECFGWP100_kgCO2e_kg', 0))
+                                        m_gwp += val * safe_float(factors_df.loc[comp_factor].get('ECFGWP100_kgCO2e_kg', 0))
                                 if m_mass > 0:
                                     comp_carbon_rate = m_gwp / m_mass
 
