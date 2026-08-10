@@ -48,7 +48,8 @@ def safe_float(val, default=0.0):
 # ==========================================
 # 2. FETCH DATA SAFELY
 # ==========================================
-@st.cache_data(ttl=3600) 
+# Cache set to 10 minutes (600 seconds) for optimal performance and rate-limit safety.
+@st.cache_data(ttl=600) 
 def load_database():
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
     
@@ -106,6 +107,7 @@ def login_page():
             response = supabase.auth.sign_in_with_password({"email": email, "password": password})
             st.session_state.user_id = response.user.id
             st.session_state.user_email = response.user.email
+            st.session_state.current_page = "Home"
             st.rerun() 
         except Exception:
             st.error("Invalid email or password. Please contact your administrator for access.")
@@ -120,7 +122,6 @@ def load_mix_to_session(mix_data, factors_dataframe):
         for c in factors_dataframe["Component"].tolist():
             st.session_state[f"cust_comp_{c}"] = safe_float(mix_data.get("components", {}).get(c, 0.0))
             
-    # Load ad-hoc materials if they exist
     if mix_data.get("adhoc_materials"):
         st.session_state["adhoc_mats"] = pd.DataFrame(mix_data["adhoc_materials"])
 
@@ -193,7 +194,7 @@ def welcome_dashboard():
             st.rerun()
 
 # ==========================================
-# 4. MAIN CALCULATOR UI
+# 4. MAIN APPLICATION UI
 # ==========================================
 def main_application():
     db = load_database()
@@ -216,7 +217,6 @@ def main_application():
     
     st.sidebar.markdown("---")
     st.sidebar.success(f"User: {st.session_state.user_email}")
-    st.sidebar.info(st.session_state.get("db_status", "Checking Database..."))
         
     if st.sidebar.button("Log Out"):
         st.session_state.user_id = None
@@ -225,7 +225,6 @@ def main_application():
 
     st.title(st.session_state.current_page)
         
-    # Pre-fetch user mixes and standard mixes to use globally
     user_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
     user_mixes = user_mixes_res.data if user_mixes_res.data else []
     custom_mix_names = [m["mix_name"] for m in user_mixes]
@@ -411,7 +410,6 @@ def main_application():
             with btn_col2:
                 save_mix = st.button("Save Custom Mix to Account")
                 
-            # Perform Unit Conversions
             custom_mix_data = {}
             for comp, val in raw_input_data.items():
                 if unit_mode == "US Imperial (lb/yd³)":
@@ -443,7 +441,6 @@ def main_application():
                 custom_mix_carbon = {}
                 c_data_mass_list = []
                 
-                # Standard items
                 for comp, mass in custom_mix_data.items():
                     if comp in factors_df.index:
                         factor_row = factors_df.loc[comp]
@@ -455,7 +452,6 @@ def main_application():
                         total_mass += mass
                         c_data_mass_list.append({"Component": comp, "Mass": mass})
                 
-                # Adhoc items
                 for adhoc in valid_adhoc:
                     comp = adhoc["Material Name"]
                     mass = adhoc["Quantity"]
