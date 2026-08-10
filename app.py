@@ -25,6 +25,8 @@ if "user_id" not in st.session_state:
     st.session_state.user_id = None
 if "user_email" not in st.session_state:
     st.session_state.user_email = None
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "Home"
 
 def clean_df(df):
     """Safely removes invisible spaces from Excel headers AND text cells."""
@@ -218,6 +220,7 @@ def main_application():
         
     if st.sidebar.button("Log Out"):
         st.session_state.user_id = None
+        st.session_state.current_page = "Home"
         st.rerun()
 
     st.title(st.session_state.current_page)
