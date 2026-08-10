@@ -228,13 +228,13 @@ def main_calculator():
 
         elif mode == "Create Custom Mix":
             st.markdown("#### Design a Custom Mix")
-            st.info("Input your material quantities below. Properties calculate automatically as you type.")
+            st.info("Input your material quantities below, then click Preview to view the carbon profile.")
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
                 custom_cat = st.selectbox("Assign to Category:", ["--- Select Category ---"] + all_categories, key="cust_cat")
             with c_col2:
-                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g. My Special HSC 50")
+                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g., C40/50 30% PFA")
                 
             st.markdown("##### Ingredients (kg/m³)")
             
@@ -254,7 +254,15 @@ def main_calculator():
                 if val > 0:
                     custom_mix_data[comp] = val
                     
-            if len(custom_mix_data) > 0:
+            st.markdown("---")
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                preview_mix = st.button("Preview Mix Properties", type="primary")
+            with btn_col2:
+                save_mix = st.button("Save Custom Mix to Account")
+                
+            # TRAFFIC COP: Only calculate and draw charts if the Preview button is clicked
+            if preview_mix and len(custom_mix_data) > 0:
                 total_mass = sum(custom_mix_data.values())
                 total_ec = 0
                 total_gwp = 0
@@ -270,7 +278,6 @@ def main_calculator():
                         total_ec += mass * float(factor_row.get('ECF_kgCO2_kg', 0))
                         total_gwp += comp_gwp
                 
-                st.markdown("---")
                 st.markdown("##### Live Properties")
                 r_col1, r_col2, r_col3, r_col4 = st.columns(4)
                 r_col1.metric("Total Mass", f"{total_mass:,.2f} kg/m³")
@@ -300,24 +307,27 @@ def main_calculator():
                         tooltip=["Component", "Carbon (kgCO2e)"]
                     ).properties(height=280)
                     st.altair_chart(c_pie_carbon, use_container_width=True)
-                
-                if st.button("Save Custom Mix to Account", type="primary"):
-                    if custom_cat == "--- Select Category ---":
-                        st.error("Please assign a category before saving.")
-                    elif not custom_mix_name:
-                        st.error("Please provide a name for your custom mix.")
-                    else:
-                        mix_payload = {
-                            "user_id": st.session_state.user_id,
-                            "mix_name": custom_mix_name,
-                            "category": custom_cat,
-                            "components": custom_mix_data
-                        }
-                        try:
-                            supabase.table("user_mixes").insert(mix_payload).execute()
-                            st.success(f"Custom mix '{custom_mix_name}' saved successfully!")
-                        except Exception as e:
-                            st.error("Failed to save mix. Please check your database connection.")
+            
+            # SAVING LOGIC SEPARATED
+            if save_mix:
+                if custom_cat == "--- Select Category ---":
+                    st.error("Please assign a category before saving.")
+                elif not custom_mix_name:
+                    st.error("Please provide a professional name for your custom mix (e.g., C40/50 30% PFA).")
+                elif len(custom_mix_data) == 0:
+                    st.error("Please add at least one ingredient.")
+                else:
+                    mix_payload = {
+                        "user_id": st.session_state.user_id,
+                        "mix_name": custom_mix_name,
+                        "category": custom_cat,
+                        "components": custom_mix_data
+                    }
+                    try:
+                        supabase.table("user_mixes").insert(mix_payload).execute()
+                        st.success(f"Custom mix '{custom_mix_name}' saved successfully!")
+                    except Exception as e:
+                        st.error("Failed to save mix. Please check your database connection.")
 
         # --- MANAGE SAVED MIXES ---
         st.markdown("---")
