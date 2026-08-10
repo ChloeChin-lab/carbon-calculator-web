@@ -5,7 +5,6 @@ import os
 import requests
 from io import BytesIO
 import altair as alt
-import gc
 
 # Force a clean, wide layout
 st.set_page_config(page_title="Carbon Calculator", page_icon="🏢", layout="wide")
@@ -459,9 +458,6 @@ def main_calculator():
                         st.rerun()
         else:
             st.info("No projects saved under your account yet.")
-
-# Aggressive garbage collection to free RAM
-gc.collect()
 
 if st.session_state.user_id is None:
     login_page()
