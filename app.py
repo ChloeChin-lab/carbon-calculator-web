@@ -44,7 +44,7 @@ def load_database():
             excel_data = BytesIO(response.content)
             
             xls = pd.read_excel(excel_data, sheet_name=required_sheets)
-            st.session_state.db_status = "🟢 Connected to Google Sheets"
+            st.session_state.db_status = "Connected to Google Sheets"
             
             return {
                 "factors": xls.get("Component_Factors", pd.DataFrame()),
@@ -54,7 +54,7 @@ def load_database():
                 "direct": xls.get("Direct_Results", pd.DataFrame())
             }
         except Exception as e:
-            st.session_state.db_status = f"🔴 Google Sheets Error: {e}"
+            st.session_state.db_status = f"Google Sheets Error: {e}"
             pass 
 
     # 2. Fallback to Local File
@@ -62,7 +62,7 @@ def load_database():
     if os.path.exists(local_path):
         try:
             xls = pd.read_excel(local_path, sheet_name=required_sheets)
-            st.session_state.db_status = "🟡 Using Local Excel File"
+            st.session_state.db_status = "Using Local Excel File"
             return {
                 "factors": xls.get("Component_Factors", pd.DataFrame()),
                 "mixes": xls.get("Mix_Designs", pd.DataFrame()),
@@ -71,8 +71,11 @@ def load_database():
                 "direct": xls.get("Direct_Results", pd.DataFrame())
             }
         except Exception as e:
-            st.session_state.db_status = f"🔴 Local File Error: {e}"
+            st.session_state.db_status = f"Local File Error: {e}"
             return None
+            
+    st.session_state.db_status = "No Database Found"
+    return None
             
     st.session_state.db_status = "🔴 No Database Found"
     return None
@@ -335,34 +338,34 @@ def main_calculator():
         user_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
         my_mixes = user_mixes_res.data if user_mixes_res.data else []
         
+        # Callback function to safely inject data before Streamlit renders the widgets
+        def load_mix_to_session(mix_data, factors_dataframe):
+            st.session_state["mix_mode_radio"] = "Create Custom Mix"
+            st.session_state["cust_cat"] = mix_data["category"]
+            st.session_state["mix_name_input"] = f"{mix_data['mix_name']} (Copy)"
+            
+            if not factors_dataframe.empty and "Component" in factors_dataframe.columns:
+                for c in factors_dataframe["Component"].tolist():
+                    st.session_state[f"cust_comp_{c}"] = float(mix_data["components"].get(c, 0.0))
+
         if my_mixes:
             for m in my_mixes:
-                with st.expander(f"⚙️ {m['mix_name']} (Category: {m['category']})"):
+                with st.expander(f"{m['mix_name']} (Category: {m['category']})"):
                     st.write("Ingredients:", m["components"])
                     
                     mix_id = m.get('id', str(m.get('mix_name')))
                     
                     btn_col_a, btn_col_b = st.columns(2)
                     with btn_col_a:
-                        if st.button(f"📝 Load to Designer", key=f"load_mix_{mix_id}"):
-                            # 1. Switch the view mode to the Custom Mix tab
-                            st.session_state["mix_mode_radio"] = "Create Custom Mix"
-                            # 2. Pre-fill the Category and Name
-                            st.session_state["cust_cat"] = m["category"]
-                            st.session_state["mix_name_input"] = f"{m['mix_name']} (Copy)"
-                            
-                            # 3. Pre-fill all the ingredient numbers safely
-                            factors_df = db["factors"]
-                            if not factors_df.empty and "Component" in factors_df.columns:
-                                for c in factors_df["Component"].tolist():
-                                    # If the component was in the saved mix, load its value. Otherwise, set to 0.0
-                                    st.session_state[f"cust_comp_{c}"] = float(m["components"].get(c, 0.0))
-                            
-                            # Instantly refresh the page to show the filled-out form
-                            st.rerun()
+                        st.button(
+                            "Duplicate and Edit", 
+                            key=f"load_mix_{mix_id}", 
+                            on_click=load_mix_to_session, 
+                            args=(m, db["factors"])
+                        )
                             
                     with btn_col_b:
-                        if st.button(f"🗑️ Delete '{m['mix_name']}'", key=f"del_mix_{mix_id}"):
+                        if st.button("Delete", key=f"del_mix_{mix_id}"):
                             if 'id' in m:
                                 supabase.table("user_mixes").delete().eq("id", m["id"]).execute()
                                 st.success("Mix deleted. Please refresh the page.")
@@ -486,11 +489,11 @@ def main_calculator():
         
         if user_projects:
             for p in user_projects:
-                with st.expander(f"📁 {p['project_name']} | Structure: {p['structure_type']} | Carbon: {p['total_embodied_carbon']:,.2f} kgCO2e"):
+                with st.expander(f"{p['project_name']} | Structure: {p['structure_type']} | Carbon: {p['total_embodied_carbon']:,.2f} kgCO2e"):
                     st.write("Component Details:", p["component_data"])
                     
                     proj_id = p.get('id', str(p.get('project_name')))
-                    if st.button(f"Delete '{p['project_name']}'", key=f"del_proj_{proj_id}"):
+                    if st.button("Delete Project", key=f"del_proj_{proj_id}"):
                         if 'id' in p:
                             supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
                             st.success("Project deleted. Please refresh the page.")
