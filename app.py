@@ -5,7 +5,9 @@ import os
 import requests
 from io import BytesIO
 import altair as alt
+import gc
 
+# STREAMING_CHUNK:Configuring Streamlit layout and connecting to cloud services...
 st.set_page_config(page_title="Carbon Calculator", page_icon="🏢", layout="wide")
 
 # ==========================================
@@ -29,9 +31,7 @@ if "user_email" not in st.session_state:
 def clean_df(df):
     """Safely removes invisible spaces from Excel headers AND text cells."""
     if isinstance(df, pd.DataFrame) and not df.empty:
-        # 1. Clean the headers
         df.columns = df.columns.str.strip()
-        # 2. Clean all text inside the cells to prevent matching crashes
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
     return df
@@ -45,6 +45,7 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
+# STREAMING_CHUNK:Building the robust database loader...
 # ==========================================
 # 2. FETCH DATA SAFELY (RAM OPTIMISED)
 # ==========================================
@@ -92,6 +93,7 @@ def load_database():
     st.session_state.db_status = "No Database Found"
     return None
 
+# STREAMING_CHUNK:Setting up security rules and login UI...
 # ==========================================
 # 3. SECURE LOGIN UI (INVITE-ONLY)
 # ==========================================
@@ -110,9 +112,6 @@ def login_page():
         except Exception as e:
             st.error("Invalid email or password. Please contact your administrator for access.")
 
-# ==========================================
-# 4. MAIN CALCULATOR UI
-# ==========================================
 def load_mix_to_session(mix_data, factors_dataframe):
     """Callback to safely inject data for the Edit button."""
     st.session_state["mix_mode_radio"] = "Create Custom Mix"
@@ -122,7 +121,55 @@ def load_mix_to_session(mix_data, factors_dataframe):
     if not factors_dataframe.empty and "Component" in factors_dataframe.columns:
         for c in factors_dataframe["Component"].tolist():
             st.session_state[f"cust_comp_{c}"] = safe_float(mix_data["components"].get(c, 0.0))
+            
+    # Load ad-hoc materials if they exist
+    if "adhoc_materials" in mix_data and mix_data["adhoc_materials"]:
+        st.session_state["adhoc_mats"] = pd.DataFrame(mix_data["adhoc_materials"])
 
+# STREAMING_CHUNK:Constructing calculation helper engines...
+def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
+    """Helper function to calculate carbon and mass for any mix (standard or custom)."""
+    m_mass = 0
+    m_gwp = 0
+    
+    if mix_name.startswith("Custom: "):
+        mix_n = mix_name.replace("Custom: ", "")
+        match_mix = next((m for m in user_mixes if m["mix_name"] == mix_n), None)
+        if match_mix and "components" in match_mix:
+            for c_name, c_val in match_mix["components"].items():
+                c_val = safe_float(c_val)
+                if c_name in factors_df.index:
+                    m_gwp += c_val * safe_float(factors_df.loc[c_name].get('ECFGWP100_kgCO2e_kg', 0))
+                m_mass += c_val
+                
+            # Add ad-hoc components if they exist
+            if "adhoc_materials" in match_mix:
+                for adhoc in match_mix["adhoc_materials"]:
+                    q = safe_float(adhoc.get("Quantity", 0))
+                    gwp_factor = safe_float(adhoc.get("GWP100 (kgCO2e/kg)", 0))
+                    m_mass += q
+                    m_gwp += q * gwp_factor
+    else:
+        match_df = db["mixes"][db["mixes"]["Mix_Key"] == mix_name]
+        if not match_df.empty:
+            mix_row = match_df.iloc[0]
+            for comp_factor in factors_df.index:
+                if comp_factor in mix_row and pd.notna(mix_row[comp_factor]):
+                    val = safe_float(mix_row[comp_factor])
+                    m_mass += val
+                    m_gwp += val * safe_float(factors_df.loc[comp_factor].get('ECFGWP100_kgCO2e_kg', 0))
+                    
+    return {
+        "Mix": mix_name.replace("Custom: ", ""),
+        "Mass (kg/m3)": m_mass,
+        "Carbon (kgCO2e/m3)": m_gwp,
+        "Factor (kgCO2e/kg)": (m_gwp / m_mass) if m_mass > 0 else 0
+    }
+
+# STREAMING_CHUNK:Building the primary app interface...
+# ==========================================
+# 4. MAIN CALCULATOR UI
+# ==========================================
 def main_calculator():
     db = load_database()
     
@@ -138,8 +185,17 @@ def main_calculator():
     if db is None:
         st.error("Cannot start the calculator. Please check the database connection.")
         st.stop()
+        
+    # Pre-fetch user mixes and standard mixes to use globally
+    user_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
+    user_mixes = user_mixes_res.data if user_mixes_res.data else []
+    custom_mix_names = [m["mix_name"] for m in user_mixes]
+    
+    standard_mixes = db["mixes"]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
+    all_available_mixes = standard_mixes + [f"Custom: {name}" for name in custom_mix_names]
+    factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
-    tab1, tab2, tab3 = st.tabs(["Materials Reference & Custom Mixes", "Project Calculator", "Saved Projects"])
+    tab1, tab2, tab3 = st.tabs(["Materials Database & Mixes", "Project Calculator", "Saved Projects"])
     
     # ---------------------------------------------------------
     # TAB 1: MATERIALS REFERENCE & CUSTOM MIX CREATOR
@@ -147,7 +203,7 @@ def main_calculator():
     with tab1:
         st.markdown("### Materials Database")
         
-        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix"], horizontal=True, key="mix_mode_radio")
+        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -197,7 +253,6 @@ def main_calculator():
                                 match_df = db["mixes"][(db["mixes"]["Category"] == selected_cat) & (db["mixes"]["Mix_Key"] == selected_mat)]
                                 if not match_df.empty:
                                     mix_row = match_df.iloc[0]
-                                    factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
                                     total_mass = 0
                                     total_ec = 0
                                     total_gwp = 0
@@ -264,32 +319,56 @@ def main_calculator():
                         except Exception as e:
                             st.error(f"Calculation Error: Something went wrong while parsing the Excel data for this material. Details: {e}")
 
+# STREAMING_CHUNK:Configuring custom mix designer and unit conversion...
         elif mode == "Create Custom Mix":
             st.markdown("#### Design a Custom Mix")
-            st.info("Input your material quantities below, then click Preview to view the carbon profile.")
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
                 custom_cat = st.selectbox("Assign to Category:", ["--- Select Category ---"] + all_categories, key="cust_cat")
             with c_col2:
-                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g., C40/50 30% PFA", key="mix_name_input")
-                
-            st.markdown("##### Ingredients (kg/m³)")
+                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g., C40/50", key="mix_name_input")
             
-            factors_df = db["factors"].drop_duplicates(subset=["Component"]) if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
+            st.markdown("---")
+            st.markdown("##### 🛠️ 1. Choose Input Units")
+            unit_mode = st.radio("How are you inputting your mix ingredients?", 
+                                 ["Standard (kg/m³)", "Total Batch Weight (kg)", "US Imperial (lb/yd³)"], 
+                                 horizontal=True)
+            
+            batch_vol = 1.0
+            if unit_mode == "Total Batch Weight (kg)":
+                batch_vol = st.number_input("What is the total batch volume? (m³):", min_value=0.1, value=1.0, step=0.1)
+                st.info(f"Your inputs will be automatically divided by {batch_vol} to standardise them to kg/m³.")
+            elif unit_mode == "US Imperial (lb/yd³)":
+                st.info("Your inputs will be automatically converted to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
+                
+            st.markdown("##### 🧪 2. Ingredients")
+            
             if not factors_df.empty:
-                factors_df = factors_df.set_index("Component")
                 all_comps = factors_df.index.tolist()
             else:
                 all_comps = []
             
-            custom_mix_data = {}
+            raw_input_data = {}
             
             input_cols = st.columns(4)
             for i, comp in enumerate(all_comps):
                 val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, key=f"cust_comp_{comp}")
                 if val > 0:
-                    custom_mix_data[comp] = val
+                    raw_input_data[comp] = val
+                    
+            st.markdown("##### ➕ 3. Add Missing/Custom Ingredients")
+            st.info("If your ingredient is not in the database, add it here manually.")
+            
+            if "adhoc_mats" not in st.session_state:
+                st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)", "ECF (kgCO2/kg)"])
+                
+            edited_adhoc_df = st.data_editor(
+                st.session_state.adhoc_mats, 
+                num_rows="dynamic", 
+                use_container_width=True,
+                key="adhoc_editor"
+            )
                     
             st.markdown("---")
             btn_col1, btn_col2 = st.columns(2)
@@ -298,13 +377,40 @@ def main_calculator():
             with btn_col2:
                 save_mix = st.button("Save Custom Mix to Account")
                 
-            if preview_mix and len(custom_mix_data) > 0:
-                total_mass = sum(custom_mix_data.values())
+            # Perform Unit Conversions
+            custom_mix_data = {}
+            for comp, val in raw_input_data.items():
+                if unit_mode == "US Imperial (lb/yd³)":
+                    custom_mix_data[comp] = val * 0.593276
+                elif unit_mode == "Total Batch Weight (kg)":
+                    custom_mix_data[comp] = val / batch_vol
+                else:
+                    custom_mix_data[comp] = val
+                    
+            valid_adhoc = []
+            for _, row in edited_adhoc_df.iterrows():
+                name = str(row.get("Material Name", "")).strip()
+                qty = safe_float(row.get("Quantity", 0))
+                gwp = safe_float(row.get("GWP100 (kgCO2e/kg)", 0))
+                ecf = safe_float(row.get("ECF (kgCO2/kg)", 0))
+                
+                if name and qty > 0:
+                    # Convert custom materials too
+                    if unit_mode == "US Imperial (lb/yd³)":
+                        qty = qty * 0.593276
+                    elif unit_mode == "Total Batch Weight (kg)":
+                        qty = qty / batch_vol
+                    valid_adhoc.append({"Material Name": name, "Quantity": qty, "GWP100 (kgCO2e/kg)": gwp, "ECF (kgCO2/kg)": ecf})
+                
+            if preview_mix and (len(custom_mix_data) > 0 or len(valid_adhoc) > 0):
+                total_mass = 0
                 total_ec = 0
                 total_gwp = 0
                 
                 custom_mix_carbon = {}
+                c_data_mass_list = []
                 
+                # Standard items
                 for comp, mass in custom_mix_data.items():
                     if comp in factors_df.index:
                         factor_row = factors_df.loc[comp]
@@ -313,12 +419,25 @@ def main_calculator():
                         
                         total_ec += mass * safe_float(factor_row.get('ECF_kgCO2_kg', 0))
                         total_gwp += comp_gwp
+                        total_mass += mass
+                        c_data_mass_list.append({"Component": comp, "Mass": mass})
                 
-                st.markdown("##### Live Properties")
+                # Adhoc items
+                for adhoc in valid_adhoc:
+                    comp = adhoc["Material Name"]
+                    mass = adhoc["Quantity"]
+                    comp_gwp = mass * adhoc["GWP100 (kgCO2e/kg)"]
+                    custom_mix_carbon[comp] = comp_gwp
+                    total_ec += mass * adhoc["ECF (kgCO2/kg)"]
+                    total_gwp += comp_gwp
+                    total_mass += mass
+                    c_data_mass_list.append({"Component": comp, "Mass": mass})
+                
+                st.markdown("##### Live Properties (Standardised to kg/m³)")
                 r_col1, r_col2, r_col3, r_col4 = st.columns(4)
                 r_col1.metric("Total Mass", f"{total_mass:,.2f} kg/m³")
-                r_col2.metric("ECF", f"{(total_ec / total_mass):,.3f} kgCO2/kg")
-                r_col3.metric("GWP100 Factor", f"{(total_gwp / total_mass):,.3f} kgCO2e/kg")
+                r_col2.metric("ECF", f"{(total_ec / total_mass):,.3f} kgCO2/kg" if total_mass > 0 else "0")
+                r_col3.metric("GWP100 Factor", f"{(total_gwp / total_mass):,.3f} kgCO2e/kg" if total_mass > 0 else "0")
                 r_col4.metric("GWP100 Total", f"{total_gwp:,.2f} kgCO2e/m³")
                 
                 st.markdown("##### Mix Breakdown Analysis")
@@ -326,7 +445,7 @@ def main_calculator():
                 
                 with c_pc_col1:
                     st.markdown("**1. By Mass / Weight**")
-                    c_data_mass = pd.DataFrame({"Component": list(custom_mix_data.keys()), "Mass": list(custom_mix_data.values())})
+                    c_data_mass = pd.DataFrame(c_data_mass_list)
                     c_pie_mass = alt.Chart(c_data_mass).mark_arc(innerRadius=40).encode(
                         theta=alt.Theta(field="Mass", type="quantitative"),
                         color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
@@ -348,33 +467,92 @@ def main_calculator():
                 if custom_cat == "--- Select Category ---":
                     st.error("Please assign a category before saving.")
                 elif not custom_mix_name:
-                    st.error("Please provide a professional name for your custom mix (e.g., C40/50 30% PFA).")
-                elif len(custom_mix_data) == 0:
+                    st.error("Please provide a professional name for your custom mix (e.g., C40/50).")
+                elif len(custom_mix_data) == 0 and len(valid_adhoc) == 0:
                     st.error("Please add at least one ingredient.")
                 else:
-                    mix_payload = {
-                        "user_id": st.session_state.user_id,
-                        "mix_name": custom_mix_name,
-                        "category": custom_cat,
-                        "components": custom_mix_data
-                    }
-                    try:
-                        supabase.table("user_mixes").insert(mix_payload).execute()
-                        st.success(f"Custom mix '{custom_mix_name}' saved successfully!")
-                    except Exception as e:
-                        st.error("Failed to save mix. Please check your database connection.")
+                    # Duplicate check
+                    existing_duplicate = [m for m in user_mixes if m['mix_name'] == custom_mix_name and m['category'] == custom_cat]
+                    if len(existing_duplicate) > 0:
+                        st.error(f"⚠️ A mix named '{custom_mix_name}' already exists in the '{custom_cat}' category. Please choose a different name.")
+                    else:
+                        mix_payload = {
+                            "user_id": st.session_state.user_id,
+                            "mix_name": custom_mix_name,
+                            "category": custom_cat,
+                            "components": custom_mix_data,
+                            "adhoc_materials": valid_adhoc
+                        }
+                        try:
+                            supabase.table("user_mixes").insert(mix_payload).execute()
+                            st.success(f"Custom mix '{custom_mix_name}' saved successfully!")
+                            st.rerun() # Refresh to show in the list below
+                        except Exception as e:
+                            st.error("Failed to save mix. Please check your database connection.")
 
+# STREAMING_CHUNK:Building the interactive comparison feature...
+        elif mode == "Compare Mixes":
+            st.markdown("#### ⚖️ Compare Mix Designs")
+            st.info("Select multiple standard or custom mixes to compare their environmental impact side-by-side.")
+            
+            selected_to_compare = st.multiselect("Select Mixes to Compare:", all_available_mixes)
+            
+            if len(selected_to_compare) > 0:
+                comparison_data = []
+                for mix in selected_to_compare:
+                    props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
+                    comparison_data.append(props)
+                    
+                comp_df = pd.DataFrame(comparison_data)
+                
+                st.markdown("---")
+                chart_col1, chart_col2 = st.columns(2)
+                
+                with chart_col1:
+                    st.markdown("**Embodied Carbon Comparison (GWP100 Total)**")
+                    bar_gwp = alt.Chart(comp_df).mark_bar().encode(
+                        x=alt.X('Mix', sort='-y', title="Mix Name"),
+                        y=alt.Y('Carbon (kgCO2e/m3)', title="Total kgCO2e/m³"),
+                        color=alt.Color('Mix', legend=None),
+                        tooltip=['Mix', alt.Tooltip('Carbon (kgCO2e/m3)', format='.2f')]
+                    ).properties(height=300)
+                    st.altair_chart(bar_gwp, use_container_width=True)
+                    
+                with chart_col2:
+                    st.markdown("**Mass vs Carbon Factor (Efficiency)**")
+                    scatter_eff = alt.Chart(comp_df).mark_circle(size=200).encode(
+                        x=alt.X('Mass (kg/m3)', title="Total Mass (kg/m³)"),
+                        y=alt.Y('Factor (kgCO2e/kg)', title="Carbon Factor (kgCO2e/kg)"),
+                        color=alt.Color('Mix', legend=alt.Legend(orient="bottom")),
+                        tooltip=['Mix', alt.Tooltip('Mass (kg/m3)', format='.2f'), alt.Tooltip('Factor (kgCO2e/kg)', format='.3f')]
+                    ).properties(height=300)
+                    st.altair_chart(scatter_eff, use_container_width=True)
+                
+                if len(comp_df) > 1:
+                    lowest_carbon_mix = comp_df.loc[comp_df['Carbon (kgCO2e/m3)'].idxmin()]
+                    highest_carbon_mix = comp_df.loc[comp_df['Carbon (kgCO2e/m3)'].idxmax()]
+                    lowest_mass_mix = comp_df.loc[comp_df['Mass (kg/m3)'].idxmin()]
+                    
+                    st.success(f"**Conclusion:** The most sustainable choice is **{lowest_carbon_mix['Mix']}**, generating the lowest total embodied carbon ({lowest_carbon_mix['Carbon (kgCO2e/m3)']:,.2f} kgCO2e/m³).")
+                    
+                    diff_percent = ((highest_carbon_mix['Carbon (kgCO2e/m3)'] - lowest_carbon_mix['Carbon (kgCO2e/m3)']) / highest_carbon_mix['Carbon (kgCO2e/m3)']) * 100
+                    if diff_percent > 0:
+                        st.info(f"Choosing **{lowest_carbon_mix['Mix']}** over **{highest_carbon_mix['Mix']}** saves **{diff_percent:.1f}%** in carbon emissions per cubic meter.")
+
+# STREAMING_CHUNK:Rendering the saved mixes and project calculator tabs...
         st.markdown("---")
-        st.markdown("#### Your Saved Custom Mixes")
-        user_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
-        my_mixes = user_mixes_res.data if user_mixes_res.data else []
+        st.markdown("#### Your Saved Custom Mix Library")
+        st.caption("Mix designs saved here can be used in the Project Calculator tab.")
 
-        if my_mixes:
-            for m in my_mixes:
+        if user_mixes:
+            for m in user_mixes:
                 with st.expander(f"{m['mix_name']} (Category: {m['category']})"):
                     st.write("Ingredients:", m["components"])
+                    if "adhoc_materials" in m and m["adhoc_materials"]:
+                        st.write("Custom Ingredients:", m["adhoc_materials"])
                     
                     mix_id = m.get('id', str(m.get('mix_name')))
+                    del_key = f"del_mix_confirm_{mix_id}"
                     
                     btn_col_a, btn_col_b = st.columns(2)
                     with btn_col_a:
@@ -386,13 +564,25 @@ def main_calculator():
                         )
                             
                     with btn_col_b:
-                        if st.button("Delete", key=f"del_mix_{mix_id}"):
-                            if 'id' in m:
-                                supabase.table("user_mixes").delete().eq("id", m["id"]).execute()
-                                st.success("Mix deleted. Please refresh the page.")
+                        # 2-Step Permanent Delete Verification
+                        if not st.session_state.get(del_key, False):
+                            if st.button("Delete", key=f"btn_del_init_{mix_id}"):
+                                st.session_state[del_key] = True
                                 st.rerun()
-                            else:
-                                st.error("Cannot delete: Your Supabase table is missing the 'id' column.")
+                        else:
+                            st.warning("⚠️ Delete this mix permanently? No recycle bin.")
+                            y_col, n_col = st.columns(2)
+                            if y_col.button("Yes, Delete", key=f"btn_del_yes_{mix_id}"):
+                                if 'id' in m:
+                                    supabase.table("user_mixes").delete().eq("id", m["id"]).execute()
+                                    st.session_state[del_key] = False
+                                    st.success("Mix deleted.")
+                                    st.rerun()
+                                else:
+                                    st.error("Missing 'id' column in Supabase.")
+                            if n_col.button("Cancel", key=f"btn_del_no_{mix_id}"):
+                                st.session_state[del_key] = False
+                                st.rerun()
         else:
             st.write("You have not saved any custom mix designs yet.")
 
@@ -405,13 +595,6 @@ def main_calculator():
         
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
         selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options)
-        
-        custom_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
-        user_mixes = custom_mixes_res.data if custom_mixes_res.data else []
-        custom_mix_names = [m["mix_name"] for m in user_mixes]
-        
-        standard_mixes = db["mixes"]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
-        all_available_mixes = ["--- Standard Mixes ---"] + standard_mixes + ["--- Custom Mixes ---"] + [f"Custom: {name}" for name in custom_mix_names]
 
         if selected_structure != "---":
             st.markdown("### 2. Configure Components & Assign Mixes")
@@ -453,35 +636,15 @@ def main_calculator():
                 else:
                     with st.spinner("Processing calculations securely..."):
                         total_carbon = 0
-                        factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
                         for comp, details in project_data.items():
                             qty = details["quantity"]
                             mix = details["assigned_mix"]
                             comp_carbon_rate = 0 
                             
-                            if mix.startswith("Custom: "):
-                                mix_n = mix.replace("Custom: ", "")
-                                match_mix = next((m for m in user_mixes if m["mix_name"] == mix_n), None)
-                                if match_mix and "components" in match_mix:
-                                    m_mass = sum(match_mix["components"].values())
-                                    m_gwp = 0
-                                    for c_name, c_val in match_mix["components"].items():
-                                        if c_name in factors_df.index:
-                                            m_gwp += safe_float(c_val) * safe_float(factors_df.loc[c_name].get('ECFGWP100_kgCO2e_kg', 0))
-                                    if m_mass > 0:
-                                        comp_carbon_rate = m_gwp / m_mass
-                            elif mix in standard_mixes:
-                                mix_row = db["mixes"][db["mixes"]["Mix_Key"] == mix].iloc[0]
-                                m_mass = 0
-                                m_gwp = 0
-                                for comp_factor in factors_df.index:
-                                    if comp_factor in mix_row and pd.notna(mix_row[comp_factor]):
-                                        val = safe_float(mix_row[comp_factor])
-                                        m_mass += val
-                                        m_gwp += val * safe_float(factors_df.loc[comp_factor].get('ECFGWP100_kgCO2e_kg', 0))
-                                if m_mass > 0:
-                                    comp_carbon_rate = m_gwp / m_mass
+                            if mix != "--- Select ---":
+                                props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
+                                comp_carbon_rate = props["Carbon (kgCO2e/m3)"]
 
                             total_carbon += qty * comp_carbon_rate
                         
@@ -504,7 +667,9 @@ def main_calculator():
     # TAB 3: SAVED PROJECTS 
     # ---------------------------------------------------------
     with tab3:
-        st.markdown("### Your Saved Projects")
+        st.markdown("### Your Project Library")
+        st.caption("Completed structures and carbon totals saved for your firm.")
+        
         projects_res = supabase.table("saved_projects").select("*").eq("user_id", st.session_state.user_id).execute()
         user_projects = projects_res.data if projects_res.data else []
         
@@ -514,13 +679,27 @@ def main_calculator():
                     st.write("Component Details:", p["component_data"])
                     
                     proj_id = p.get('id', str(p.get('project_name')))
-                    if st.button("Delete Project", key=f"del_proj_{proj_id}"):
-                        if 'id' in p:
-                            supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
-                            st.success("Project deleted. Please refresh the page.")
+                    del_key = f"del_proj_confirm_{proj_id}"
+                    
+                    # 2-Step Permanent Delete Verification
+                    if not st.session_state.get(del_key, False):
+                        if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
+                            st.session_state[del_key] = True
                             st.rerun()
-                        else:
-                            st.error("Cannot delete: Your Supabase table is missing the 'id' column.")
+                    else:
+                        st.warning("⚠️ Delete this project permanently? No recycle bin.")
+                        y_col, n_col = st.columns(2)
+                        if y_col.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
+                            if 'id' in p:
+                                supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
+                                st.session_state[del_key] = False
+                                st.success("Project deleted.")
+                                st.rerun()
+                            else:
+                                st.error("Missing 'id' column in Supabase.")
+                        if n_col.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
+                            st.session_state[del_key] = False
+                            st.rerun()
         else:
             st.info("No projects saved under your account yet.")
 
