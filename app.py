@@ -33,11 +33,11 @@ if "user_email" not in st.session_state:
 # ==========================================
 @st.cache_data(ttl=3600) 
 def load_database():
-    # We strictly request ONLY these 5 tabs. This prevents the 139 RAM crash!
+    # We strictly request ONLY these 5 tabs to prevent RAM overload
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
     
     # 1. Try Google Sheets First
-    if SHEET_ID and len(SHEET_ID) > 20: # Basic check to ensure it's an ID, not empty
+    if SHEET_ID and len(SHEET_ID) > 20: 
         export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
         try:
             response = requests.get(export_url)
@@ -56,7 +56,7 @@ def load_database():
             }
         except Exception as e:
             st.session_state.db_status = f"🔴 Google Sheets Error: {e}"
-            pass # Fallback to local if Google fails
+            pass 
 
     # 2. Fallback to Local File
     local_path = "materials_database.xlsx"
@@ -125,7 +125,6 @@ def main_calculator():
         
         mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix"], horizontal=True)
         
-        # Extract categories safely
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
         all_categories = sorted(list(mix_cats.union(direct_cats)))
@@ -147,84 +146,86 @@ def main_calculator():
                     selected_mat = st.selectbox("Material Type/Grade:", ["--- Select Material ---"] + all_mats, key="view_mat")
                 
                 if selected_mat != "--- Select Material ---":
-                    is_mix = selected_mat in mix_mats
-                    
-                    final_props = {
-                        "Total_Mass_kg_m3": 0, "ECF_kgCO2_kg": 0,
-                        "EC_kgCO2_m3": 0, "ECFGWP100_kgCO2e_kg": 0,
-                        "GWP100_kgCO2e_m3": 0
-                    }
-                    
-                    chart_components_mass = {}
-                    chart_components_carbon = {}
-                    
-                    if not is_mix:
-                        direct_row = db["direct"][(db["direct"]["Category"] == selected_cat) & (db["direct"]["Material_Key"] == selected_mat)].iloc[0]
-                        for prop in final_props:
-                            if prop in direct_row and pd.notna(direct_row[prop]):
-                                final_props[prop] = float(direct_row[prop])
-                    else:
-                        mix_row = db["mixes"][(db["mixes"]["Category"] == selected_cat) & (db["mixes"]["Mix_Key"] == selected_mat)].iloc[0]
-                        factors_df = db["factors"].set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
-                        total_mass = 0
-                        total_ec = 0
-                        total_gwp = 0
+                    # TRAFFIC COP BUTTON ADDED HERE TO PREVENT RAM CRASHES
+                    if st.button("View Material Properties", type="primary"):
+                        is_mix = selected_mat in mix_mats
                         
-                        for comp in factors_df.index:
-                            if comp in mix_row and pd.notna(mix_row[comp]) and float(mix_row[comp]) > 0:
-                                mass = float(mix_row[comp])
-                                factor_row = factors_df.loc[comp]
-                                comp_gwp = mass * float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
-                                
-                                chart_components_mass[comp] = mass
-                                chart_components_carbon[comp] = comp_gwp
-                                
-                                total_mass += mass
-                                total_ec += mass * float(factor_row.get('ECF_kgCO2_kg', 0))
-                                total_gwp += comp_gwp
-                                
-                        if total_mass > 0:
-                            final_props["Total_Mass_kg_m3"] = total_mass
-                            final_props["EC_kgCO2_m3"] = total_ec
-                            final_props["GWP100_kgCO2e_m3"] = total_gwp
-                            final_props["ECF_kgCO2_kg"] = total_ec / total_mass
-                            final_props["ECFGWP100_kgCO2e_kg"] = total_gwp / total_mass
-                    
-                    st.markdown("---")
-                    st.markdown(f"**Properties for {selected_mat}**")
-                    
-                    m_col1, m_col2, m_col3 = st.columns(3)
-                    m_col1.metric("Total Mass", f"{final_props['Total_Mass_kg_m3']:,.2f} kg/m³")
-                    m_col2.metric("ECF", f"{final_props['ECF_kgCO2_kg']:,.3f} kgCO2/kg")
-                    m_col3.metric("GWP100 Factor", f"{final_props['ECFGWP100_kgCO2e_kg']:,.3f} kgCO2e/kg")
-                    
-                    m_col4, m_col5 = st.columns(2)
-                    m_col4.metric("Embodied Carbon", f"{final_props['EC_kgCO2_m3']:,.2f} kgCO2/m³")
-                    m_col5.metric("GWP100 Total", f"{final_props['GWP100_kgCO2e_m3']:,.2f} kgCO2e/m³")
-                    
-                    if is_mix and len(chart_components_mass) > 0:
-                        st.markdown("#### Mix Breakdown Analysis")
-                        pc_col1, pc_col2 = st.columns(2)
+                        final_props = {
+                            "Total_Mass_kg_m3": 0, "ECF_kgCO2_kg": 0,
+                            "EC_kgCO2_m3": 0, "ECFGWP100_kgCO2e_kg": 0,
+                            "GWP100_kgCO2e_m3": 0
+                        }
                         
-                        with pc_col1:
-                            st.markdown("**1. By Mass / Weight (kg)**")
-                            chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass (kg)": list(chart_components_mass.values())})
-                            pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
-                                theta=alt.Theta(field="Mass (kg)", type="quantitative"),
-                                color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                tooltip=["Component", "Mass (kg)"]
-                            ).properties(height=280)
-                            st.altair_chart(pie_mass, use_container_width=True)
+                        chart_components_mass = {}
+                        chart_components_carbon = {}
+                        
+                        if not is_mix:
+                            direct_row = db["direct"][(db["direct"]["Category"] == selected_cat) & (db["direct"]["Material_Key"] == selected_mat)].iloc[0]
+                            for prop in final_props:
+                                if prop in direct_row and pd.notna(direct_row[prop]):
+                                    final_props[prop] = float(direct_row[prop])
+                        else:
+                            mix_row = db["mixes"][(db["mixes"]["Category"] == selected_cat) & (db["mixes"]["Mix_Key"] == selected_mat)].iloc[0]
+                            factors_df = db["factors"].set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
+                            total_mass = 0
+                            total_ec = 0
+                            total_gwp = 0
                             
-                        with pc_col2:
-                            st.markdown("**2. By Embodied Carbon (kgCO2e)**")
-                            chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon (kgCO2e)": list(chart_components_carbon.values())})
-                            pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
-                                theta=alt.Theta(field="Carbon (kgCO2e)", type="quantitative"),
-                                color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                tooltip=["Component", "Carbon (kgCO2e)"]
-                            ).properties(height=280)
-                            st.altair_chart(pie_carbon, use_container_width=True)
+                            for comp in factors_df.index:
+                                if comp in mix_row and pd.notna(mix_row[comp]) and float(mix_row[comp]) > 0:
+                                    mass = float(mix_row[comp])
+                                    factor_row = factors_df.loc[comp]
+                                    comp_gwp = mass * float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
+                                    
+                                    chart_components_mass[comp] = mass
+                                    chart_components_carbon[comp] = comp_gwp
+                                    
+                                    total_mass += mass
+                                    total_ec += mass * float(factor_row.get('ECF_kgCO2_kg', 0))
+                                    total_gwp += comp_gwp
+                                    
+                            if total_mass > 0:
+                                final_props["Total_Mass_kg_m3"] = total_mass
+                                final_props["EC_kgCO2_m3"] = total_ec
+                                final_props["GWP100_kgCO2e_m3"] = total_gwp
+                                final_props["ECF_kgCO2_kg"] = total_ec / total_mass
+                                final_props["ECFGWP100_kgCO2e_kg"] = total_gwp / total_mass
+                        
+                        st.markdown("---")
+                        st.markdown(f"**Properties for {selected_mat}**")
+                        
+                        m_col1, m_col2, m_col3 = st.columns(3)
+                        m_col1.metric("Total Mass", f"{final_props['Total_Mass_kg_m3']:,.2f} kg/m³")
+                        m_col2.metric("ECF", f"{final_props['ECF_kgCO2_kg']:,.3f} kgCO2/kg")
+                        m_col3.metric("GWP100 Factor", f"{final_props['ECFGWP100_kgCO2e_kg']:,.3f} kgCO2e/kg")
+                        
+                        m_col4, m_col5 = st.columns(2)
+                        m_col4.metric("Embodied Carbon", f"{final_props['EC_kgCO2_m3']:,.2f} kgCO2/m³")
+                        m_col5.metric("GWP100 Total", f"{final_props['GWP100_kgCO2e_m3']:,.2f} kgCO2e/m³")
+                        
+                        if is_mix and len(chart_components_mass) > 0:
+                            st.markdown("#### Mix Breakdown Analysis")
+                            pc_col1, pc_col2 = st.columns(2)
+                            
+                            with pc_col1:
+                                st.markdown("**1. By Mass / Weight (kg)**")
+                                chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass (kg)": list(chart_components_mass.values())})
+                                pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
+                                    theta=alt.Theta(field="Mass (kg)", type="quantitative"),
+                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                    tooltip=["Component", "Mass (kg)"]
+                                ).properties(height=280)
+                                st.altair_chart(pie_mass, use_container_width=True)
+                                
+                            with pc_col2:
+                                st.markdown("**2. By Embodied Carbon (kgCO2e)**")
+                                chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon (kgCO2e)": list(chart_components_carbon.values())})
+                                pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
+                                    theta=alt.Theta(field="Carbon (kgCO2e)", type="quantitative"),
+                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                    tooltip=["Component", "Carbon (kgCO2e)"]
+                                ).properties(height=280)
+                                st.altair_chart(pie_carbon, use_container_width=True)
 
         elif mode == "Create Custom Mix":
             st.markdown("#### Design a Custom Mix")
@@ -234,7 +235,7 @@ def main_calculator():
             with c_col1:
                 custom_cat = st.selectbox("Assign to Category:", ["--- Select Category ---"] + all_categories, key="cust_cat")
             with c_col2:
-                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g. Special HSC 50")
+                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g. My Special HSC 50")
                 
             st.markdown("##### Ingredients (kg/m³)")
             
@@ -317,7 +318,7 @@ def main_calculator():
                             supabase.table("user_mixes").insert(mix_payload).execute()
                             st.success(f"Custom mix '{custom_mix_name}' saved successfully!")
                         except Exception as e:
-                            st.error(f"Failed to save mix. Ensure RLS policies are set up correctly.")
+                            st.error("Failed to save mix. Please check your database connection.")
 
         # --- MANAGE SAVED MIXES ---
         st.markdown("---")
@@ -438,7 +439,7 @@ def main_calculator():
                             st.success(f"Project '{project_name}' saved successfully to your account!")
                             st.metric(label="Total Embodied Carbon (kgCO2e)", value=f"{total_carbon:,.2f}")
                         except Exception as e:
-                            st.error(f"Failed to save project. Ensure RLS policies are set up correctly.")
+                            st.error("Failed to save project. Please check your database connection.")
 
     # ---------------------------------------------------------
     # TAB 3: SAVED PROJECTS 
@@ -458,6 +459,9 @@ def main_calculator():
                         st.rerun()
         else:
             st.info("No projects saved under your account yet.")
+
+# Aggressive garbage collection to free RAM
+gc.collect()
 
 if st.session_state.user_id is None:
     login_page()
