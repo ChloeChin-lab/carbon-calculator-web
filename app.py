@@ -8,6 +8,12 @@ import altair as alt
 import uuid
 import time
 
+try:
+    from fpdf import FPDF
+    HAS_FPDF = True
+except ImportError:
+    HAS_FPDF = False
+
 st.set_page_config(page_title="Sustainability Assessment System", layout="wide")
 
 st.markdown("""
@@ -68,6 +74,36 @@ if "project_totals" not in st.session_state:
     st.session_state.project_totals = None
 if "project_clean_data" not in st.session_state:
     st.session_state.project_clean_data = []
+
+def generate_pdf_report(df, best, worst, savings):
+    if not HAS_FPDF:
+        return None
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(0, 10, "Sustainability Comparison Report", ln=True, align='C')
+        pdf.set_font("Arial", '', 12)
+        pdf.ln(10)
+        
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 8, "Executive Summary", ln=True)
+        pdf.set_font("Arial", '', 11)
+        summary = (f"This comparative analysis evaluates the Embodied Carbon Intensity (ECI) across selected materials. "
+                   f"The optimal material is {best['Material']} with a GWP100 of {best['Total GWP100 (kgCO2e/m³)']:.2f} kgCO2e/m³. "
+                   f"Specifying this over the highest-impact alternative ({worst['Material']}) yields a {savings:.1f}% reduction in embodied carbon.")
+        pdf.multi_cell(0, 6, summary)
+        pdf.ln(10)
+        
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 8, "Data Summary", ln=True)
+        pdf.set_font("Arial", '', 10)
+        for _, row in df.iterrows():
+            pdf.cell(0, 6, f"- {row['Material']}: Mass: {row['Total Mass (kg/m³)']:.2f} kg/m³ | GWP100: {row['Total GWP100 (kgCO2e/m³)']:.2f} kgCO2e/m³", ln=True)
+            
+        return pdf.output(dest='S').encode('latin-1')
+    except Exception:
+        return None
 
 def clean_df(df):
     """Safely removes invisible spaces from Excel headers and text cells."""
@@ -404,7 +440,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 140px;">
             <h3 style="color: #2C3E50; margin-top: 0;">My Library</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Your historical portfolio. Review, analyse, and manage your saved projects and custom mixes.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">Your historical database. Review, analyse, and manage your saved projects and custom mixes.</p>
         </div><br>""", unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_saved", use_container_width=True):
             st.session_state.current_page = "My Library"
@@ -817,17 +853,24 @@ def main_application():
                 tab_bar, tab_scatter = st.tabs(["Carbon Leaderboard", "Density vs. Carbon Trade-off"])
                 
                 with tab_bar:
-                    bars = alt.Chart(comp_df).mark_bar(cornerRadiusEnd=4, height=40).encode(
+                    # FIX: Force best_val into a Python float to prevent Altair Dataset errors
+                    best_val = float(best['Total GWP100 (kgCO2e/m³)'])
+                    
+                    base_chart = alt.Chart(comp_df).encode(
                         x=alt.X("Total GWP100 (kgCO2e/m³):Q", title="Global Warming Potential (kgCO2e/m³)", scale=alt.Scale(domain=[0, comp_df["Total GWP100 (kgCO2e/m³)"].max() * 1.15])),
-                        y=alt.Y("Material:N", sort="-x", title=""),
+                        y=alt.Y("Material:N", sort="-x", title="")
+                    )
+                    
+                    bars = base_chart.mark_bar(cornerRadiusEnd=4, height=40).encode(
                         color=alt.condition(
-                            alt.datum['Total GWP100 (kgCO2e/m³)'] == best['Total GWP100 (kgCO2e/m³)'],
+                            alt.datum['Total GWP100 (kgCO2e/m³)'] == best_val,
                             alt.value('#27ae60'),  
                             alt.value('#95a5a6')   
                         ),
                         tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
                     )
-                    text = bars.mark_text(
+                    
+                    text = base_chart.mark_text(
                         align='left',
                         baseline='middle',
                         dx=5,
@@ -835,6 +878,7 @@ def main_application():
                     ).encode(
                         text=alt.Text('Total GWP100 (kgCO2e/m³):Q', format=',.2f')
                     )
+                    
                     final_bar_chart = (bars + text).properties(height=alt.Step(60))
                     st.altair_chart(final_bar_chart, use_container_width=True)
                     
@@ -874,7 +918,7 @@ def main_application():
                         use_container_width=True
                     )
                     
-                    if 'generate_pdf_report' in globals():
+                    if HAS_FPDF:
                         pdf_bytes = generate_pdf_report(comp_df, best, worst, savings_pct)
                         if pdf_bytes:
                             col_pdf.download_button(
@@ -884,8 +928,6 @@ def main_application():
                                 mime="application/pdf",
                                 use_container_width=True
                             )
-                    else:
-                        col_pdf.info("ℹ️ To enable PDF export, run `pip install fpdf` on your server and add the PDF logic.")
 
     # ---------------------------------------------------------
     # TAB 2: PROJECT ASSESSMENT
@@ -993,7 +1035,6 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                # Giant unrestricted universal dropdown list
                 units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "% by volume", "% by weight", "m", "m2", "units"]
                 
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
@@ -1009,7 +1050,6 @@ def main_application():
                 
                 for mat in comp["materials"]:
                     
-                    # Fetch immediate widget state to make popups instant
                     unit_key = f"unit_{mat['id']}"
                     if unit_key in st.session_state:
                         mat["unit"] = st.session_state[unit_key]
@@ -1161,7 +1201,6 @@ def main_application():
                         st.session_state.execute_save = False
                         st.session_state.existing_proj_id = None
                         
-                        # AUTOMATIC CLEAR AFTER SAVE
                         time.sleep(1.5)
                         st.session_state.draft_proj_name = ""
                         st.session_state.draft_structure = "---"
@@ -1180,17 +1219,32 @@ def main_application():
     # ---------------------------------------------------------
     elif st.session_state.current_page == "My Library":
         
-        tab_proj, tab_mix = st.tabs(["Project Portfolio", "Custom Mix Library"])
+        tab_proj, tab_mix = st.tabs(["Saved Projects", "Saved Custom Mixes"])
         
         with tab_proj:
-            st.markdown("### Your Project Portfolio")
-            
             projects_res = supabase.table("saved_projects").select("*").eq("user_id", st.session_state.user_id).execute()
             user_projects = projects_res.data if projects_res.data else []
             
             if user_projects:
-                for p in user_projects:
-                    with st.expander(f"🏗️ {p['project_name']} | Structure: {p['structure_type']} | GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e"):
+                proj_names = [p['project_name'] for p in user_projects]
+                
+                if "lib_selected_proj" not in st.session_state or st.session_state.lib_selected_proj not in proj_names:
+                    st.session_state.lib_selected_proj = proj_names[0]
+                    
+                col_list, col_details = st.columns([1, 2.5])
+                
+                with col_list:
+                    st.markdown("#### Project List")
+                    selected_proj = st.radio("Select Project", proj_names, label_visibility="collapsed", key="lib_proj_radio")
+                    if selected_proj != st.session_state.lib_selected_proj:
+                        st.session_state.lib_selected_proj = selected_proj
+                        st.rerun()
+                        
+                with col_details:
+                    p = next((proj for proj in user_projects if proj['project_name'] == st.session_state.lib_selected_proj), None)
+                    if p:
+                        st.markdown(f"### {p['project_name']}")
+                        st.caption(f"Structure Template: {p['structure_type']} | Baseline GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e")
                         
                         draft_comps = []
                         raw_data = p.get("component_data", [])
@@ -1228,7 +1282,6 @@ def main_application():
                                     "materials": mats
                                 })
 
-                        # Send the saved data back through the engine to render the perfect table
                         df, totals, _ = calculate_project_data(draft_comps, db, user_mixes, factors_df)
                         
                         if df is not None:
@@ -1256,12 +1309,7 @@ def main_application():
                         
                         with btn_col_a:
                             st.markdown("<br>", unsafe_allow_html=True)
-                            st.button(
-                                "Duplicate and Edit", 
-                                key=f"load_proj_{proj_id}", 
-                                on_click=load_project_to_session, 
-                                args=(p, db)
-                            )
+                            st.button("Edit Project In Builder", key=f"load_proj_{proj_id}", on_click=load_project_to_session, args=(p, db))
                                 
                         with btn_col_b:
                             st.markdown("<br>", unsafe_allow_html=True)
@@ -1288,15 +1336,29 @@ def main_application():
                 st.info("No projects saved under your account yet.")
 
         with tab_mix:
-            st.markdown("### Your Custom Mixes")
-            
             if not user_mixes:
                 st.info("No custom mixes found on your account. Create one in 'Materials & Mixes'!")
             else:
-                for m in user_mixes:
-                    with st.expander(f"🧪 {m['mix_name']} (Category: {m['category']})"):
+                mix_names = [m['mix_name'] for m in user_mixes]
+                
+                if "lib_selected_mix" not in st.session_state or st.session_state.lib_selected_mix not in mix_names:
+                    st.session_state.lib_selected_mix = mix_names[0]
+                    
+                col_m_list, col_m_details = st.columns([1, 2.5])
+                
+                with col_m_list:
+                    st.markdown("#### Material List")
+                    selected_mix = st.radio("Select Mix", mix_names, label_visibility="collapsed", key="lib_mix_radio")
+                    if selected_mix != st.session_state.lib_selected_mix:
+                        st.session_state.lib_selected_mix = selected_mix
+                        st.rerun()
                         
-                        # Calculate and Display Live Properties
+                with col_m_details:
+                    m = next((mix for mix in user_mixes if mix['mix_name'] == st.session_state.lib_selected_mix), None)
+                    if m:
+                        st.markdown(f"### {m['mix_name']}")
+                        st.caption(f"Assigned Category: {m['category']}")
+                        
                         c_mix_name = f"Custom: {m['mix_name']}"
                         props = calculate_mix_carbon(c_mix_name, db, user_mixes, factors_df)
                         
@@ -1306,23 +1368,59 @@ def main_application():
                         m_col2.metric("GWP100 Factor", f"{props['Factor_GWP (kgCO2e/kg)']:,.3f} kgCO2e/kg")
                         m_col3.metric("GWP100 Total", f"{props['Factor_GWP (kgCO2e/kg)'] * props['Mass (kg/m3)']:,.2f} kgCO2e/m³")
                         
-                        # Display Mix Recipe
-                        st.markdown("##### Ingredient Recipe")
+                        chart_components_mass = {}
+                        chart_components_carbon = {}
+                        
                         recipe_data = []
                         if m.get("components"):
                             for c, val in m["components"].items():
-                                if val > 0: recipe_data.append({"Material": c, "Quantity": val, "Type": "Standard"})
+                                if val > 0: 
+                                    recipe_data.append({"Material": c, "Quantity": val, "Type": "Standard"})
+                                    if c in factors_df.index:
+                                        factor_row = factors_df.loc[c]
+                                        c_gwp = val * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
+                                        chart_components_mass[c] = val
+                                        chart_components_carbon[c] = c_gwp
                         if m.get("adhoc_materials"):
                             for adhoc in m["adhoc_materials"]:
                                 recipe_data.append({"Material": adhoc["Material Name"], "Quantity": adhoc["Quantity"], "Type": "Custom"})
+                                c = adhoc["Material Name"]
+                                val = adhoc["Quantity"]
+                                c_gwp = val * adhoc["GWP100 (kgCO2e/kg)"]
+                                chart_components_mass[c] = val
+                                chart_components_carbon[c] = c_gwp
                         
+                        if len(chart_components_mass) > 0:
+                            st.markdown("##### Mix Breakdown Analysis")
+                            pc_col1, pc_col2 = st.columns(2)
+                            
+                            with pc_col1:
+                                st.markdown("**By Mass / Weight**")
+                                chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass": list(chart_components_mass.values())})
+                                pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
+                                    theta=alt.Theta(field="Mass", type="quantitative"),
+                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                    tooltip=["Component", "Mass"]
+                                ).properties(height=280)
+                                st.altair_chart(pie_mass, use_container_width=True)
+                                
+                            with pc_col2:
+                                st.markdown("**By GWP100 Carbon**")
+                                chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
+                                pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
+                                    theta=alt.Theta(field="Carbon", type="quantitative"),
+                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                    tooltip=["Component", "Carbon"]
+                                ).properties(height=280)
+                                st.altair_chart(pie_carbon, use_container_width=True)
+                        
+                        st.markdown("##### Ingredient Recipe")
                         if recipe_data:
                             st.dataframe(pd.DataFrame(recipe_data), use_container_width=True, hide_index=True)
                         
                         st.markdown("---")
                         
-                        # Rename and Delete Actions
-                        col_rn, col_del = st.columns([2, 1])
+                        col_rn, col_dup, col_del = st.columns([1.5, 1, 1])
                         with col_rn:
                             new_m_name = st.text_input("Rename Mix:", value=m['mix_name'], key=f"rn_in_{m['id']}")
                             if st.button("Update Name", key=f"rn_btn_{m['id']}"):
@@ -1333,7 +1431,25 @@ def main_application():
                                     st.rerun()
                                 except Exception as e:
                                     st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
-                                
+                        
+                        with col_dup:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if st.button("Duplicate Mix", key=f"dup_m_{m['id']}"):
+                                mix_payload = {
+                                    "user_id": st.session_state.user_id,
+                                    "mix_name": f"{m['mix_name']} (Copy)",
+                                    "category": m['category'],
+                                    "components": m.get("components", {}),
+                                    "adhoc_materials": m.get("adhoc_materials", [])
+                                }
+                                try:
+                                    supabase.table("user_mixes").insert(mix_payload).execute()
+                                    st.success("Mix successfully duplicated!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error("Database Save Error.")
+
                         with col_del:
                             st.markdown("<br>", unsafe_allow_html=True)
                             if st.button("Delete Mix", key=f"del_m_{m['id']}"):
