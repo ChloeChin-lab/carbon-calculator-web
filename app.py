@@ -177,6 +177,8 @@ def load_project_to_session(p_data, db):
     new_draft = []
     for c_data in p_data.get("component_data", []):
         c_name = c_data.get("component_name", "Unknown")
+        b_name = c_data.get("base_name", c_name) # Fetch the original base_name
+        
         mats = []
         for m_data in c_data.get("materials", []):
             mats.append({
@@ -189,7 +191,7 @@ def load_project_to_session(p_data, db):
             
         new_draft.append({
             "id": str(uuid.uuid4()),
-            "base_name": c_name if "Extra" not in c_name else "Extra",
+            "base_name": b_name if "Extra" not in b_name else "Extra",
             "custom_name": c_name,
             "count": c_data.get("multiplier_count", 1),
             "materials": mats
@@ -736,11 +738,13 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                units = ["m3"]
+                # Universal fallback list so users are never trapped with just m3
+                units = ["m3", "tonnes", "kg", "L", "m", "m2", "units", "% by vol.", "% of wt.", "% by conc. vol."]
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp["base_name"]]
                     if not unit_row.empty and "Unit_Options" in unit_row.columns:
-                        units = str(unit_row["Unit_Options"].values[0]).split(",")
+                        # Clean spaces from the excel text so they map correctly
+                        units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
 
                 mats_to_remove = []
                 
@@ -919,6 +923,7 @@ def main_application():
                             })
                                 
                         clean_project_data.append({
+                            "base_name": comp["base_name"],
                             "component_name": c_name,
                             "multiplier_count": c_multiplier,
                             "materials": c_materials
@@ -968,7 +973,7 @@ def main_application():
                 st.markdown(totals_html, unsafe_allow_html=True)
                 
                 st.markdown("---")
-                st.markdown("### 4. Save Project to Cloud")
+                st.markdown("### 4. Save Project")
                 
                 s_col1, s_col2 = st.columns([3, 1])
                 with s_col1:
