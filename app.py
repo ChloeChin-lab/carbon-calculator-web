@@ -57,6 +57,7 @@ def safe_float(val, default=0.0):
 # ==========================================
 # 2. FETCH DATA SAFELY (RAM OPTIMISED)
 # ==========================================
+# Cache set to 10 minutes (600 seconds) for optimal performance and rate-limit safety.
 @st.cache_data(ttl=600) 
 def load_database():
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
@@ -101,7 +102,7 @@ def load_database():
 # ==========================================
 def login_page():
     st.title("Sustainability Assessment System")
-    st.markdown("Please authenticate to access the assessment modules.")
+    st.markdown("Please authenticate to access.")
     
     email = st.text_input("Email", key="login_email")
     password = st.text_input("Password", type="password", key="login_password")
@@ -177,7 +178,7 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
 
 def welcome_dashboard():
     st.title("Sustainability Assessment System")
-    st.markdown("Select a module below to begin your workflow. Use the Materials Library to configure your ingredients, and Project Assessment to assemble those ingredients into a complete structure.")
+    st.markdown("Select a module below to begin your workflow.")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -191,7 +192,7 @@ def welcome_dashboard():
         </div>
         <br>
         """, unsafe_allow_html=True)
-        if st.button("Access Materials Library", use_container_width=True):
+        if st.button("Access", key="btn_access_mat", use_container_width=True):
             st.session_state.current_page = "Materials & Mixes"
             st.rerun()
         
@@ -199,11 +200,11 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-top: 4px solid #1ABC9C; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Project Assessment</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Configure building components, assign materials, and generate total embodied carbon assessments.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">Configure building components, assign materials, and calculate total embodied carbon.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
-        if st.button("Access Project Assessment", use_container_width=True):
+        if st.button("Access", key="btn_access_proj", use_container_width=True):
             st.session_state.current_page = "Project Assessment"
             st.rerun()
         
@@ -211,11 +212,11 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Review, analyse, or delete previously completed structure assessments.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">Review, analyse, or delete previously saved project assessments.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
-        if st.button("Access Saved Projects", use_container_width=True):
+        if st.button("Access", key="btn_access_saved", use_container_width=True):
             st.session_state.current_page = "Saved Projects"
             st.rerun()
 
@@ -228,9 +229,8 @@ def main_application():
     if db is None:
         st.error("Cannot start the application. Please check the database connection.")
         st.stop()
-
+        
     # --- 1. HOME DASHBOARD ROUTING ---
-    # If on the Home page, show the Welcome boxes and hide the sidebar navigation
     if st.session_state.current_page == "Home":
         st.sidebar.caption(f"User: {st.session_state.user_email}")
         if st.sidebar.button("Log Out"):
@@ -239,10 +239,10 @@ def main_application():
             st.rerun()
             
         welcome_dashboard()
-        return  # Stop execution here so it doesn't run the module code below
+        return  
 
     # --- 2. MODULE ROUTING ---
-    if st.sidebar.button("← Return to Home"):
+    if st.sidebar.button("Return to Home"):
         st.session_state.current_page = "Home"
         st.rerun()
 
@@ -263,7 +263,7 @@ def main_application():
     st.sidebar.markdown("---")
     st.sidebar.caption(f"User: {st.session_state.user_email}")
         
-    if st.sidebar.button("Log Out ", key="logout_module"): 
+    if st.sidebar.button("Log Out", key="logout_module"):
         st.session_state.user_id = None
         st.session_state.current_page = "Home"
         st.rerun()
@@ -606,7 +606,7 @@ def main_application():
                     
                     if len(comp_df) > 1:
                         lowest_carbon_mix = comp_df.loc[comp_df['Carbon (kgCO2e/m3)'].idxmin()]
-                        st.success(f"Conclusion: The most sustainable choice is **{lowest_carbon_mix['Mix']}**, generating the lowest total embodied carbon ({lowest_carbon_mix['Carbon (kgCO2e/m3)']:,.2f} kgCO2e/m³).")
+                        st.success(f"**Conclusion:** The most sustainable choice is **{lowest_carbon_mix['Mix']}**, generating the lowest total embodied carbon ({lowest_carbon_mix['Carbon (kgCO2e/m3)']:,.2f} kgCO2e/m³).")
                         
                         if len(comp_df) == 2:
                             highest_carbon_mix = comp_df.loc[comp_df['Carbon (kgCO2e/m3)'].idxmax()]
@@ -614,7 +614,7 @@ def main_application():
                             if diff_percent > 0:
                                 st.info(f"Choosing **{lowest_carbon_mix['Mix']}** over **{highest_carbon_mix['Mix']}** saves **{diff_percent:.1f}%** in carbon emissions per cubic meter.")
                         elif len(comp_df) > 2:
-                            st.info(f"Carbon Savings per m³ when choosing {lowest_carbon_mix['Mix']}:")
+                            st.info(f"**Carbon Savings per m³ when choosing {lowest_carbon_mix['Mix']}:**")
                             comp_df_sorted = comp_df.sort_values(by='Carbon (kgCO2e/m3)', ascending=False)
                             for idx, row in comp_df_sorted.iterrows():
                                 if row['Mix'] != lowest_carbon_mix['Mix'] and row['Carbon (kgCO2e/m3)'] > 0:
@@ -711,18 +711,13 @@ def main_application():
         
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
         
-        try:
-            struct_index = (["---"] + structure_options).index(st.session_state.draft_structure)
-        except ValueError:
-            struct_index = 0
+        selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options)
 
-        selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options, index=struct_index)
+        if selected_structure != "---":
+            if st.button("Generate Components", type="primary"):
+                st.session_state.draft_structure = selected_structure
+                st.session_state.draft_components = []
 
-        if selected_structure != st.session_state.draft_structure:
-            st.session_state.draft_structure = selected_structure
-            st.session_state.draft_components = []
-
-            if selected_structure != "---":
                 components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
                 component_list = [c.strip() for c in components_str.split(",")]
                 
@@ -739,33 +734,43 @@ def main_application():
                             "mix": "--- Select ---"
                         }]
                     })
-            st.rerun()
+                st.rerun()
 
-        if st.session_state.draft_structure != "---":
+        if len(st.session_state.draft_components) > 0:
             st.markdown("### 2. Configure Components & Assign Mixes")
+            
+            # Retrieve all unique components across all structures for the dropdown
+            all_comps_set = set()
+            if not db["structures"].empty and "Components" in db["structures"].columns:
+                for c_str in db["structures"]["Components"].dropna():
+                    for item in str(c_str).split(","):
+                        all_comps_set.add(item.strip())
+            global_comp_list = sorted(list(all_comps_set))
             
             comps_to_remove = []
 
             for comp in st.session_state.draft_components:
                 st.markdown("---")
                 
-                col_count, col_title, col_del_comp = st.columns([1.5, 3, 1])
+                col_title, col_count, col_del_comp = st.columns([3, 1.5, 1])
                 is_extra = "Extra" in comp["base_name"]
+
+                with col_title:
+                    if is_extra:
+                        comp["custom_name"] = st.text_input("Custom Component Name:", value=comp["custom_name"], key=f"name_{comp['id']}")
+                    else:
+                        opts = global_comp_list
+                        if comp["base_name"] not in opts:
+                            opts = [comp["base_name"]] + opts
+                        comp["base_name"] = st.selectbox("Component Name:", opts, index=opts.index(comp["base_name"]), key=f"name_{comp['id']}")
 
                 with col_count:
                     comp["count"] = st.number_input("Quantity (Nos.)", min_value=1, step=1, value=int(comp.get("count", 1)), key=f"count_{comp['id']}")
 
-                with col_title:
-                    if is_extra:
-                        comp["custom_name"] = st.text_input("Component Name:", value=comp["custom_name"], key=f"name_{comp['id']}")
-                    else:
-                        st.text_input("Component Name:", value=comp["base_name"], disabled=True, key=f"name_{comp['id']}")
-
                 with col_del_comp:
-                    if is_extra:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
-                            comps_to_remove.append(comp)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
+                        comps_to_remove.append(comp)
 
                 units = ["m3"]
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
@@ -780,7 +785,7 @@ def main_application():
                     col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
                     
                     with col1:
-                        mat["mix"] = st.selectbox("Select Mix/Material", ["--- Select ---"] + all_available_mixes, index=(["--- Select ---"] + all_available_mixes).index(mat["mix"]) if mat["mix"] in (["--- Select ---"] + all_available_mixes) else 0, key=f"mix_{mat['id']}")
+                        mat["mix"] = st.selectbox("Select Material", ["--- Select ---"] + all_available_mixes, index=(["--- Select ---"] + all_available_mixes).index(mat["mix"]) if mat["mix"] in (["--- Select ---"] + all_available_mixes) else 0, key=f"mix_{mat['id']}")
                     with col2:
                         mat["qty"] = st.number_input("Amount", min_value=0.0, step=0.1, value=float(mat.get("qty", 0.0)), key=f"qty_{mat['id']}")
                     with col3:
@@ -795,9 +800,9 @@ def main_application():
                     comp["materials"].remove(mat)
                     st.rerun()
 
-                col_add_mat, col_nav_mix, col_empty = st.columns([1.5, 1.5, 4])
+                col_add_mat, col_nav_mix = st.columns([1.5, 3.5])
                 with col_add_mat:
-                    if st.button("+ Add Material", key=f"add_mat_btn_{comp['id']}"):
+                    if st.button(f"+ Add Material", key=f"add_mat_btn_{comp['id']}"):
                         comp["materials"].append({
                             "id": str(uuid.uuid4()),
                             "qty": 0.0,
@@ -806,7 +811,7 @@ def main_application():
                         })
                         st.rerun()
                 with col_nav_mix:
-                    if st.button("Create New Custom Mix ➔", key=f"new_mix_{comp['id']}"):
+                    if st.button("Create New Mix ➔", key=f"nav_mix_btn_{comp['id']}"):
                         st.session_state.current_page = "Materials & Mixes"
                         st.rerun()
 
