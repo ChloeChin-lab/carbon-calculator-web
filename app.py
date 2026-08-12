@@ -38,6 +38,7 @@ if "draft_components" not in st.session_state:
     st.session_state.draft_components = []
 
 def clean_df(df):
+    """Safely removes invisible spaces from Excel headers and text cells."""
     if isinstance(df, pd.DataFrame) and not df.empty:
         df.columns = df.columns.str.strip()
         for col in df.select_dtypes(include=['object']).columns:
@@ -45,6 +46,7 @@ def clean_df(df):
     return df
 
 def safe_float(val, default=0.0):
+    """Safely handles text, N/A, dashes, or blanks in Excel cells without crashing."""
     if pd.isna(val):
         return default
     try:
@@ -55,6 +57,7 @@ def safe_float(val, default=0.0):
 # ==========================================
 # 2. FETCH DATA SAFELY (RAM OPTIMISED)
 # ==========================================
+# Cache set to 10 minutes (600 seconds) for optimal performance and rate-limit safety.
 @st.cache_data(ttl=600) 
 def load_database():
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
@@ -115,6 +118,7 @@ def login_page():
             st.error("Invalid email or password. Please contact your administrator for access.")
 
 def load_mix_to_session(mix_data, factors_dataframe):
+    """Callback to safely inject data for the Duplicate and Edit button."""
     st.session_state["mix_mode_radio"] = "Create Custom Mix"
     st.session_state["cust_cat"] = mix_data["category"]
     st.session_state["mix_name_input"] = f"{mix_data['mix_name']} (Copy)"
@@ -127,6 +131,7 @@ def load_mix_to_session(mix_data, factors_dataframe):
         st.session_state["adhoc_mats"] = pd.DataFrame(mix_data["adhoc_materials"])
 
 def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
+    """Helper function to calculate carbon and mass for any mix or direct material."""
     m_mass = 0
     m_gwp = 0
     
@@ -148,7 +153,8 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                     m_mass += q
                     m_gwp += q * gwp_factor
     else:
-        match_df = db["mixes"][db["mixes"]["Mix_Key"] == mix_name]
+        # Check standard mixes first
+        match_df = db["mixes"][db["mixes"]["Mix_Key"] == mix_name] if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else pd.DataFrame()
         if not match_df.empty:
             mix_row = match_df.iloc[0]
             for comp_factor in factors_df.index:
@@ -157,11 +163,16 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                     m_mass += val
                     m_gwp += val * safe_float(factors_df.loc[comp_factor].get('ECFGWP100_kgCO2e_kg', 0))
         else:
-            direct_df = db["direct"][db["direct"]["Material_Key"] == mix_name]
-            if not direct_df.empty:
-                direct_row = direct_df.iloc[0]
-                m_mass = safe_float(direct_row.get("Total_Mass_kg_m3", 0))
-                m_gwp = safe_float(direct_row.get("GWP100_kgCO2e_m3", 0))
+            # If not a mix, check direct results
+            match_direct = db["direct"][db["direct"]["Material_Key"] == mix_name] if not db["direct"].empty and "Material_Key" in db["direct"].columns else pd.DataFrame()
+            if not match_direct.empty:
+                direct_row = match_direct.iloc[0]
+                m_mass = safe_float(direct_row.get("Total_Mass_kg_m3", 1.0)) # Fallback to 1 to avoid div zero if just a factor
+                
+                # Try getting volumetric first, if 0 fallback to weight-based factor
+                m_gwp = safe_float(direct_row.get("GWP100_kgCO2e_m3", 0.0))
+                if m_gwp == 0.0 and "ECFGWP100_kgCO2e_kg" in direct_row:
+                    m_gwp = safe_float(direct_row.get("ECFGWP100_kgCO2e_kg", 0.0))
                     
     return {
         "Mix": mix_name.replace("Custom: ", ""),
@@ -182,11 +193,11 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Materials & Mixes</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The master library. View standard material properties, engineer custom mix designs, and compare carbon efficiencies side-by-side.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The master library. View material properties, engineer custom designs, and compare carbon efficiencies.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
-        if st.button("Access", key="btn_access_mat", use_container_width=True):
+        if st.button("Access", key="btn_nav_mats", use_container_width=True):
             st.session_state.current_page = "Materials & Mixes"
             st.rerun()
         
@@ -194,11 +205,11 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-top: 4px solid #1ABC9C; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Project Assessment</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The structural assembly. Configure building components, assign materials, and generate total embodied carbon assessments.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The structural assembly. Configure components, assign materials, and generate total embodied carbon assessments.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
-        if st.button("Access", key="btn_access_proj", use_container_width=True):
+        if st.button("Access", key="btn_nav_proj", use_container_width=True):
             st.session_state.current_page = "Project Assessment"
             st.rerun()
         
@@ -206,13 +217,16 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Review, analyse, or delete previously completed structure assessments.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The completed portfolio. Review, analyse, or delete previously completed structure assessments.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
-        if st.button("Access", key="btn_access_saved", use_container_width=True):
+        if st.button("Access", key="btn_nav_saved", use_container_width=True):
             st.session_state.current_page = "Saved Projects"
             st.rerun()
+            
+    st.markdown("---")
+    st.info("**Workflow Note:** Custom mixes you create in the **Materials & Mixes** library will automatically become available for selection inside your **Project Assessments**.")
 
 # ==========================================
 # 4. MAIN APPLICATION UI
@@ -223,39 +237,32 @@ def main_application():
     if db is None:
         st.error("Cannot start the application. Please check the database connection.")
         st.stop()
-        
+
     if st.session_state.current_page == "Home":
         st.sidebar.caption(f"User: {st.session_state.user_email}")
         if st.sidebar.button("Log Out"):
             st.session_state.user_id = None
             st.session_state.current_page = "Home"
             st.rerun()
-            
         welcome_dashboard()
-        return  
+        return
 
-    if st.sidebar.button("← Return to Home"):
+    if st.sidebar.button("Return to Home"):
         st.session_state.current_page = "Home"
         st.rerun()
 
     st.sidebar.markdown("---")
     
-    nav_options = ["Materials & Mixes", "Project Assessment", "Saved Projects"]
-    try:
-        nav_idx = nav_options.index(st.session_state.current_page)
-    except ValueError:
-        nav_idx = 0
-        
-    st.sidebar.radio("Navigation", nav_options, 
+    st.sidebar.radio("Navigation", ["Materials & Mixes", "Project Assessment", "Saved Projects"], 
                      key="nav_radio", 
-                     index=nav_idx,
+                     index=["Materials & Mixes", "Project Assessment", "Saved Projects"].index(st.session_state.current_page),
                      on_change=lambda: st.session_state.update(current_page=st.session_state.nav_radio),
                      label_visibility="collapsed")
     
     st.sidebar.markdown("---")
     st.sidebar.caption(f"User: {st.session_state.user_email}")
         
-    if st.sidebar.button("Log Out", key="logout_module"):
+    if st.sidebar.button("Log Out"):
         st.session_state.user_id = None
         st.session_state.current_page = "Home"
         st.rerun()
@@ -266,11 +273,12 @@ def main_application():
     user_mixes = user_mixes_res.data if user_mixes_res.data else []
     custom_mix_names = [m["mix_name"] for m in user_mixes]
     
-    standard_mixes = db["mixes"]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
+    # Consolidate Mixes and Direct Materials for a master dropdown list
+    mix_mats = db["mixes"]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
     direct_mats = db["direct"]["Material_Key"].dropna().tolist() if not db["direct"].empty and "Material_Key" in db["direct"].columns else []
+    standard_mixes = sorted(list(set(mix_mats + direct_mats)))
     
-    all_standard = sorted(list(set(standard_mixes + direct_mats)))
-    all_available_mixes = all_standard + [f"Custom: {name}" for name in custom_mix_names]
+    all_available_mixes = standard_mixes + [f"Custom: {name}" for name in custom_mix_names]
     factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
     # ---------------------------------------------------------
@@ -292,16 +300,16 @@ def main_application():
                 selected_cat = st.selectbox("Material Category:", ["--- Select Category ---"] + all_categories, key="view_cat")
             
             if selected_cat != "--- Select Category ---":
-                mix_mats = db["mixes"][db["mixes"]["Category"] == selected_cat]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
-                direct_mats = db["direct"][db["direct"]["Category"] == selected_cat]["Material_Key"].dropna().tolist() if not db["direct"].empty and "Material_Key" in db["direct"].columns else []
-                all_mats = sorted(list(set(mix_mats + direct_mats)))
+                cat_mix_mats = db["mixes"][db["mixes"]["Category"] == selected_cat]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
+                cat_direct_mats = db["direct"][db["direct"]["Category"] == selected_cat]["Material_Key"].dropna().tolist() if not db["direct"].empty and "Material_Key" in db["direct"].columns else []
+                cat_all_mats = sorted(list(set(cat_mix_mats + cat_direct_mats)))
                 
                 with col_sel2:
-                    selected_mat = st.selectbox("Material Type/Grade:", ["--- Select Material ---"] + all_mats, key="view_mat")
+                    selected_mat = st.selectbox("Material Type/Grade:", ["--- Select Material ---"] + cat_all_mats, key="view_mat")
                 
                 if selected_mat != "--- Select Material ---":
                     if st.button("View Material Properties", type="primary"):
-                        is_mix = selected_mat in mix_mats
+                        is_mix = selected_mat in cat_mix_mats
                         
                         final_props = {
                             "Total_Mass_kg_m3": 0, "ECF_kgCO2_kg": 0,
@@ -606,7 +614,7 @@ def main_application():
                             if diff_percent > 0:
                                 st.info(f"Choosing **{lowest_carbon_mix['Mix']}** over **{highest_carbon_mix['Mix']}** saves **{diff_percent:.1f}%** in carbon emissions per cubic meter.")
                         elif len(comp_df) > 2:
-                            st.info(f"**Carbon Savings per m³ when choosing {lowest_carbon_mix['Mix']}:**")
+                            st.info(f"**Carbon Savings per unit when choosing {lowest_carbon_mix['Mix']}:**")
                             comp_df_sorted = comp_df.sort_values(by='Carbon (kgCO2e/m3)', ascending=False)
                             for idx, row in comp_df_sorted.iterrows():
                                 if row['Mix'] != lowest_carbon_mix['Mix'] and row['Carbon (kgCO2e/m3)'] > 0:
@@ -710,29 +718,31 @@ def main_application():
 
         selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options, index=struct_index)
 
-        if selected_structure != "---":
-            if selected_structure != st.session_state.draft_structure or len(st.session_state.draft_components) == 0:
-                if st.button("Generate Components", type="primary"):
-                    st.session_state.draft_structure = selected_structure
-                    st.session_state.draft_components = []
+        if selected_structure != "---" and selected_structure != st.session_state.draft_structure:
+            if st.button("Generate Components", type="primary"):
+                st.session_state.draft_structure = selected_structure
+                st.session_state.draft_components = []
 
-                    components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
-                    component_list = [c.strip() for c in components_str.split(",") if c.strip().lower() != "extra"]
-                    
-                    for comp in component_list:
-                        st.session_state.draft_components.append({
+                components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
+                
+                # Exclude 'Extra' from auto-generation
+                component_list = [c.strip() for c in components_str.split(",") if "Extra" not in c.strip()]
+                
+                for comp in component_list:
+                    st.session_state.draft_components.append({
+                        "id": str(uuid.uuid4()),
+                        "base_name": comp,
+                        "custom_name": comp, 
+                        "count": 1,
+                        "materials": [{
                             "id": str(uuid.uuid4()),
-                            "base_name": comp,
-                            "custom_name": comp,
-                            "count": 1,
-                            "materials": [{
-                                "id": str(uuid.uuid4()),
-                                "qty": 0.0,
-                                "unit": "m3",
-                                "mix": "--- Select ---"
-                            }]
-                        })
-                    st.rerun()
+                            "label": "",
+                            "qty": 0.0,
+                            "unit": "m3",
+                            "mix": "--- Select ---"
+                        }]
+                    })
+                st.rerun()
 
         if st.session_state.draft_structure != "---" and len(st.session_state.draft_components) > 0:
             st.markdown("### 2. Configure Components & Assign Mixes")
@@ -742,46 +752,40 @@ def main_application():
             for comp in st.session_state.draft_components:
                 st.markdown("---")
                 
-                col_title, col_count, col_del_comp = st.columns([3, 1.5, 1])
-
-                with col_title:
-                    comp["custom_name"] = st.text_input("Component Name:", value=comp["custom_name"], key=f"name_{comp['id']}")
+                col_count, col_title, col_del_comp = st.columns([1, 3, 1])
 
                 with col_count:
                     comp["count"] = st.number_input("Quantity (Nos.)", min_value=1, step=1, value=int(comp.get("count", 1)), key=f"count_{comp['id']}")
+
+                with col_title:
+                    comp["custom_name"] = st.text_input("Component Name:", value=comp.get("custom_name", comp["base_name"]), key=f"name_{comp['id']}")
 
                 with col_del_comp:
                     st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                         comps_to_remove.append(comp)
 
-                universal_units = ["m3", "kg", "tonnes", "L", "% by vol.", "% of wt."]
-                units = []
+                units = ["m3"]
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp["base_name"]]
                     if not unit_row.empty and "Unit_Options" in unit_row.columns:
-                        units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
-                
-                # Merge lists, keeping Excel suggested units at the top
-                for u in universal_units:
-                    if u not in units:
-                        units.append(u)
-                
-                if not units:
-                    units = universal_units
+                        units = str(unit_row["Unit_Options"].values[0]).split(",")
 
                 mats_to_remove = []
                 
+                # Material Data Entry (Label -> Mix -> Amount -> Unit)
                 for mat in comp["materials"]:
-                    col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
+                    col_label, col_mix, col_qty, col_unit, col_del = st.columns([2.5, 3, 1.5, 1.5, 1])
                     
-                    with col1:
-                        mat["mix"] = st.selectbox("Select Mix/Material", ["--- Select ---"] + all_available_mixes, index=(["--- Select ---"] + all_available_mixes).index(mat["mix"]) if mat["mix"] in (["--- Select ---"] + all_available_mixes) else 0, key=f"mix_{mat['id']}")
-                    with col2:
+                    with col_label:
+                        mat["label"] = st.text_input("Label (Optional)", value=mat.get("label", ""), key=f"label_{mat['id']}", placeholder="e.g. Strands")
+                    with col_mix:
+                        mat["mix"] = st.selectbox("Select Material", ["--- Select ---"] + all_available_mixes, index=(["--- Select ---"] + all_available_mixes).index(mat["mix"]) if mat["mix"] in (["--- Select ---"] + all_available_mixes) else 0, key=f"mix_{mat['id']}")
+                    with col_qty:
                         mat["qty"] = st.number_input("Amount", min_value=0.0, step=0.1, value=float(mat.get("qty", 0.0)), key=f"qty_{mat['id']}")
-                    with col3:
+                    with col_unit:
                         mat["unit"] = st.selectbox("Unit", units, index=units.index(mat["unit"]) if mat["unit"] in units else 0, key=f"unit_{mat['id']}")
-                    with col4:
+                    with col_del:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if len(comp["materials"]) > 1: 
                             if st.button("Delete", key=f"del_mat_{mat['id']}"):
@@ -791,18 +795,19 @@ def main_application():
                     comp["materials"].remove(mat)
                     st.rerun()
 
-                col_add_mat, col_nav_mix, col_empty = st.columns([1, 1, 3])
+                col_add_mat, col_nav_mix, col_empty = st.columns([1.5, 1.5, 3])
                 with col_add_mat:
                     if st.button(f"+ Add Material", key=f"add_mat_btn_{comp['id']}"):
                         comp["materials"].append({
                             "id": str(uuid.uuid4()),
+                            "label": "",
                             "qty": 0.0,
                             "unit": units[0],
                             "mix": "--- Select ---"
                         })
                         st.rerun()
                 with col_nav_mix:
-                    if st.button("Create New Mix ➔", key=f"nav_mix_btn_{comp['id']}"):
+                    if st.button("Create New Mix ➔", key=f"nav_mix_{comp['id']}"):
                         st.session_state.current_page = "Materials & Mixes"
                         st.rerun()
 
@@ -811,20 +816,24 @@ def main_application():
                 st.rerun()
 
             st.markdown("---")
-            if st.button("+ Add an 'Extra' Component"):
-                st.session_state.draft_components.append({
-                    "id": str(uuid.uuid4()),
-                    "base_name": "Extra",
-                    "custom_name": "Extra Component",
-                    "count": 1,
-                    "materials": [{
+            
+            col_add_extra, col_nav_mix = st.columns([1, 1])
+            with col_add_extra:
+                if st.button("+ Add an 'Extra' Component"):
+                    st.session_state.draft_components.append({
                         "id": str(uuid.uuid4()),
-                        "qty": 0.0,
-                        "unit": "m3",
-                        "mix": "--- Select ---"
-                    }]
-                })
-                st.rerun()
+                        "base_name": "Extra",
+                        "custom_name": "Custom Additional Component",
+                        "count": 1,
+                        "materials": [{
+                            "id": str(uuid.uuid4()),
+                            "label": "",
+                            "qty": 0.0,
+                            "unit": "m3",
+                            "mix": "--- Select ---"
+                        }]
+                    })
+                    st.rerun()
 
             st.markdown("---")
             
@@ -853,6 +862,7 @@ def main_application():
                                 total_carbon += (qty * comp_carbon_rate) * c_multiplier
                                 
                                 c_materials.append({
+                                    "label": mat.get("label", ""),
                                     "quantity": qty,
                                     "unit": mat["unit"],
                                     "assigned_mix": mix
@@ -906,6 +916,7 @@ def main_application():
                                 clean_data.append({
                                     "Component": c_name,
                                     "Quantity (Nos.)": c_count,
+                                    "Label/Note": mat.get("label", ""),
                                     "Material": mat.get("assigned_mix", ""),
                                     "Amount": mat.get("quantity", 0),
                                     "Unit": mat.get("unit", "")
@@ -915,6 +926,7 @@ def main_application():
                             clean_data.append({
                                 "Component": c_name,
                                 "Quantity (Nos.)": 1,
+                                "Label/Note": "",
                                 "Material": c_details.get("assigned_mix", ""),
                                 "Amount": c_details.get("quantity", 0),
                                 "Unit": c_details.get("unit", "")
