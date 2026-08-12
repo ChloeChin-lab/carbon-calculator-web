@@ -57,7 +57,6 @@ def safe_float(val, default=0.0):
 # ==========================================
 # 2. FETCH DATA SAFELY (RAM OPTIMISED)
 # ==========================================
-# Cache set to 10 minutes (600 seconds) for optimal performance and rate-limit safety.
 @st.cache_data(ttl=600) 
 def load_database():
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
@@ -98,11 +97,11 @@ def load_database():
     return None
 
 # ==========================================
-# 3. SECURE LOGIN UI
+# 3. SECURE LOGIN UI & HELPERS
 # ==========================================
 def login_page():
-    st.title("Sustainability Assessment System")
-    st.markdown("Please authenticate to access.")
+    st.title("Structural Carbon Assessment System")
+    st.markdown("Please authenticate to access the assessment modules.")
     
     email = st.text_input("Email", key="login_email")
     password = st.text_input("Password", type="password", key="login_password")
@@ -118,7 +117,6 @@ def login_page():
             st.error("Invalid email or password. Please contact your administrator for access.")
 
 def load_mix_to_session(mix_data, factors_dataframe):
-    """Callback to safely inject data for the Duplicate and Edit button."""
     st.session_state["mix_mode_radio"] = "Create Custom Mix"
     st.session_state["cust_cat"] = mix_data["category"]
     st.session_state["mix_name_input"] = f"{mix_data['mix_name']} (Copy)"
@@ -131,7 +129,6 @@ def load_mix_to_session(mix_data, factors_dataframe):
         st.session_state["adhoc_mats"] = pd.DataFrame(mix_data["adhoc_materials"])
 
 def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
-    """Helper function to calculate carbon and mass for any mix."""
     m_mass = 0
     m_gwp = 0
     
@@ -162,7 +159,6 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                     m_mass += val
                     m_gwp += val * safe_float(factors_df.loc[comp_factor].get('ECFGWP100_kgCO2e_kg', 0))
         else:
-            # Check direct results for single materials (steel, timber, etc.)
             direct_df = db["direct"][db["direct"]["Material_Key"] == mix_name]
             if not direct_df.empty:
                 direct_row = direct_df.iloc[0]
@@ -188,7 +184,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Materials & Mixes</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">View standard material properties, create custom mix designs, and compare carbon efficiencies.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The master library. View standard material properties, engineer custom mix designs, and compare carbon efficiencies.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
@@ -200,7 +196,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-top: 4px solid #1ABC9C; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Project Assessment</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Configure building components, assign materials, and calculate total embodied carbon.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The structural assembly. Configure building components, assign materials, and generate total embodied carbon assessments.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
@@ -212,7 +208,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Review, analyse, or delete previously saved project assessments.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The completed portfolio. Review, analyse, or delete previously saved structure assessments.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
@@ -230,7 +226,6 @@ def main_application():
         st.error("Cannot start the application. Please check the database connection.")
         st.stop()
         
-    # --- 1. HOME DASHBOARD ROUTING ---
     if st.session_state.current_page == "Home":
         st.sidebar.caption(f"User: {st.session_state.user_email}")
         if st.sidebar.button("Log Out"):
@@ -241,7 +236,6 @@ def main_application():
         welcome_dashboard()
         return  
 
-    # --- 2. MODULE ROUTING ---
     if st.sidebar.button("Return to Home"):
         st.session_state.current_page = "Home"
         st.rerun()
@@ -457,7 +451,7 @@ def main_application():
             with btn_col1:
                 preview_mix = st.button("Preview Mix Properties", type="primary")
             with btn_col2:
-                save_mix = st.button("Save Custom Mix")
+                save_mix = st.button("Save Custom Mix to Account")
                 
             custom_mix_data = {}
             for comp, val in raw_input_data.items():
@@ -545,7 +539,7 @@ def main_application():
                 if custom_cat == "--- Select Category ---":
                     st.error("Please assign a category before saving.")
                 elif not custom_mix_name:
-                    st.error("Please provide a name for your custom mix.")
+                    st.error("Please provide a name for your custom mix (e.g., C40/50).")
                 elif len(custom_mix_data) == 0 and len(valid_adhoc) == 0:
                     st.error("Please add at least one ingredient.")
                 else:
@@ -711,67 +705,63 @@ def main_application():
         
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
         
-        selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options)
+        try:
+            struct_index = (["---"] + structure_options).index(st.session_state.draft_structure)
+        except ValueError:
+            struct_index = 0
 
+        selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options, index=struct_index)
+
+        # Show Generate button if the selected structure is new, or if the board is empty
         if selected_structure != "---":
-            if st.button("Generate Components", type="primary"):
-                st.session_state.draft_structure = selected_structure
-                st.session_state.draft_components = []
+            if selected_structure != st.session_state.draft_structure or len(st.session_state.draft_components) == 0:
+                if st.button("Generate Components", type="primary"):
+                    st.session_state.draft_structure = selected_structure
+                    st.session_state.draft_components = []
 
-                components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
-                component_list = [c.strip() for c in components_str.split(",")]
-                
-                for comp in component_list:
-                    st.session_state.draft_components.append({
-                        "id": str(uuid.uuid4()),
-                        "base_name": comp,
-                        "custom_name": "",
-                        "count": 1,
-                        "materials": [{
+                    components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
+                    # Generate list, specifically filtering out the word "extra" if it exists in the excel string
+                    component_list = [c.strip() for c in components_str.split(",") if c.strip().lower() != "extra"]
+                    
+                    for comp in component_list:
+                        st.session_state.draft_components.append({
                             "id": str(uuid.uuid4()),
-                            "qty": 0.0,
-                            "unit": "m3",
-                            "mix": "--- Select ---"
-                        }]
-                    })
-                st.rerun()
+                            "base_name": comp,
+                            "display_name": comp,
+                            "count": 1,
+                            "materials": [{
+                                "id": str(uuid.uuid4()),
+                                "qty": 0.0,
+                                "unit": "m3",
+                                "mix": "--- Select ---"
+                            }]
+                        })
+                    st.rerun()
 
-        if len(st.session_state.draft_components) > 0:
+        if st.session_state.draft_structure != "---" and len(st.session_state.draft_components) > 0:
             st.markdown("### 2. Configure Components & Assign Mixes")
-            
-            # Retrieve all unique components across all structures for the dropdown
-            all_comps_set = set()
-            if not db["structures"].empty and "Components" in db["structures"].columns:
-                for c_str in db["structures"]["Components"].dropna():
-                    for item in str(c_str).split(","):
-                        all_comps_set.add(item.strip())
-            global_comp_list = sorted(list(all_comps_set))
             
             comps_to_remove = []
 
             for comp in st.session_state.draft_components:
                 st.markdown("---")
                 
-                col_title, col_count, col_del_comp = st.columns([3, 1.5, 1])
-                is_extra = "Extra" in comp["base_name"]
-
-                with col_title:
-                    if is_extra:
-                        comp["custom_name"] = st.text_input("Custom Component Name:", value=comp["custom_name"], key=f"name_{comp['id']}")
-                    else:
-                        opts = global_comp_list
-                        if comp["base_name"] not in opts:
-                            opts = [comp["base_name"]] + opts
-                        comp["base_name"] = st.selectbox("Component Name:", opts, index=opts.index(comp["base_name"]), key=f"name_{comp['id']}")
+                col_count, col_title, col_del_comp = st.columns([1.5, 3, 1])
 
                 with col_count:
                     comp["count"] = st.number_input("Quantity (Nos.)", min_value=1, step=1, value=int(comp.get("count", 1)), key=f"count_{comp['id']}")
+
+                with col_title:
+                    # Streamlit doesn't support 'comboboxes' (dropdowns with free typing). 
+                    # Providing a smart text input ensures the user can easily edit without blank spaces.
+                    comp["display_name"] = st.text_input("Component Name:", value=comp.get("display_name", comp["base_name"]), key=f"name_{comp['id']}")
 
                 with col_del_comp:
                     st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                         comps_to_remove.append(comp)
 
+                # Look up valid units using the hidden base_name
                 units = ["m3"]
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp["base_name"]]
@@ -785,7 +775,7 @@ def main_application():
                     col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
                     
                     with col1:
-                        mat["mix"] = st.selectbox("Select Material", ["--- Select ---"] + all_available_mixes, index=(["--- Select ---"] + all_available_mixes).index(mat["mix"]) if mat["mix"] in (["--- Select ---"] + all_available_mixes) else 0, key=f"mix_{mat['id']}")
+                        mat["mix"] = st.selectbox("Select Mix/Material", ["--- Select ---"] + all_available_mixes, index=(["--- Select ---"] + all_available_mixes).index(mat["mix"]) if mat["mix"] in (["--- Select ---"] + all_available_mixes) else 0, key=f"mix_{mat['id']}")
                     with col2:
                         mat["qty"] = st.number_input("Amount", min_value=0.0, step=0.1, value=float(mat.get("qty", 0.0)), key=f"qty_{mat['id']}")
                     with col3:
@@ -800,7 +790,7 @@ def main_application():
                     comp["materials"].remove(mat)
                     st.rerun()
 
-                col_add_mat, col_nav_mix = st.columns([1.5, 3.5])
+                col_add_mat, col_nav_mix = st.columns([2, 2])
                 with col_add_mat:
                     if st.button(f"+ Add Material", key=f"add_mat_btn_{comp['id']}"):
                         comp["materials"].append({
@@ -825,7 +815,7 @@ def main_application():
                 st.session_state.draft_components.append({
                     "id": str(uuid.uuid4()),
                     "base_name": "Extra",
-                    "custom_name": "",
+                    "display_name": "Extra Component",
                     "count": 1,
                     "materials": [{
                         "id": str(uuid.uuid4()),
@@ -847,7 +837,6 @@ def main_application():
                         clean_project_data = []
 
                         for comp in st.session_state.draft_components:
-                            c_name = comp["custom_name"] if ("Extra" in comp["base_name"] and comp["custom_name"]) else comp["base_name"]
                             c_materials = []
                             c_multiplier = int(comp.get("count", 1))
 
@@ -869,7 +858,7 @@ def main_application():
                                 })
                                 
                             clean_project_data.append({
-                                "component_name": c_name,
+                                "component_name": comp["display_name"],
                                 "multiplier_count": c_multiplier,
                                 "materials": c_materials
                             })
