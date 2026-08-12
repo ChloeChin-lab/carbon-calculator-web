@@ -404,7 +404,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 140px;">
             <h3 style="color: #2C3E50; margin-top: 0;">My Library</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Your historical portfolio. Review, analyze, and manage your saved projects and custom mixes.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">Your historical portfolio. Review, analyse, and manage your saved projects and custom mixes.</p>
         </div><br>""", unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_saved", use_container_width=True):
             st.session_state.current_page = "My Library"
@@ -464,7 +464,7 @@ def main_application():
     # ---------------------------------------------------------
     if st.session_state.current_page == "Materials & Mixes":
 
-        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
+        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Material / Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -571,85 +571,111 @@ def main_application():
                         except Exception as e:
                             st.error(f"Error parsing data. Details: {e}")
 
-        elif mode == "Create Custom Mix":
-            st.markdown("#### Design a Custom Mix")
+        elif mode == "Create Custom Material / Mix":
+            st.markdown("#### Design a Custom Material or Mix")
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
                 custom_cat = st.selectbox("Assign to Category:", ["--- Select Category ---"] + all_categories, key="cust_cat")
             with c_col2:
-                custom_mix_name = st.text_input("Name your Custom Mix:", placeholder="e.g., C40/50", key="mix_name_input")
+                custom_mix_name = st.text_input("Name your Custom Item:", placeholder="e.g., C40/50 or Recycled Steel", key="mix_name_input")
             
             st.markdown("---")
-            st.markdown("##### 1. Choose Input Units")
-            unit_mode = st.radio("How are you inputting your mix ingredients?", 
-                                 ["Standard (kg/m³)", "Total Batch Weight (kg)", "US Imperial (lb/yd³)"], 
-                                 horizontal=True)
+            creation_type = st.radio("What type of item are you creating?", 
+                                     ["Multi-Ingredient Mix (e.g., Concrete, Asphalt)", "Standalone Material (e.g., Steel, Timber, Polymer)"],
+                                     horizontal=True)
             
-            batch_vol = 1.0
-            if unit_mode == "Total Batch Weight (kg)":
-                batch_vol = st.number_input("What is the total batch volume? (m³):", min_value=0.1, value=1.0, step=0.1)
-                st.info(f"Your inputs will be automatically divided by {batch_vol} to standardise them to kg/m³.")
-            elif unit_mode == "US Imperial (lb/yd³)":
-                st.info("Your inputs will be automatically converted to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
-                
-            st.markdown("##### 2. Standard Ingredients")
-            
-            if not factors_df.empty:
-                all_comps = factors_df.index.tolist()
-            else:
-                all_comps = []
-            
-            raw_input_data = {}
-            
-            input_cols = st.columns(4)
-            for i, comp in enumerate(all_comps):
-                val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, key=f"cust_comp_{comp}")
-                if val > 0:
-                    raw_input_data[comp] = val
-                    
-            st.markdown("##### 3. Add Custom Ingredients")
-            st.caption("To delete a row, highlight it and press Delete on your keyboard.")
-            
-            if "adhoc_mats" not in st.session_state:
-                st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
-                
-            edited_adhoc_df = st.data_editor(
-                st.session_state.adhoc_mats, 
-                num_rows="dynamic", 
-                use_container_width=True,
-                key="adhoc_editor",
-                column_order=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"]
-            )
-                    
-            st.markdown("---")
-            btn_col1, btn_col2 = st.columns(2)
-            with btn_col1:
-                preview_mix = st.button("Preview Mix Properties", type="primary")
-            with btn_col2:
-                save_mix = st.button("Save Custom Mix")
-                
             custom_mix_data = {}
-            for comp, val in raw_input_data.items():
-                if unit_mode == "US Imperial (lb/yd³)":
-                    custom_mix_data[comp] = val * 0.593276
-                elif unit_mode == "Total Batch Weight (kg)":
-                    custom_mix_data[comp] = val / batch_vol
-                else:
-                    custom_mix_data[comp] = val
-                    
             valid_adhoc = []
-            for _, row in edited_adhoc_df.iterrows():
-                name = str(row.get("Material Name", "")).strip()
-                qty = safe_float(row.get("Quantity", 0))
-                gwp = safe_float(row.get("GWP100 (kgCO2e/kg)", 0))
+            
+            if creation_type == "Standalone Material (e.g., Steel, Timber, Polymer)":
+                st.markdown("##### Define Material Properties")
+                st.info("Enter the baseline density and carbon factor for this new standalone material. This ensures it maps correctly on the Density vs. Carbon scatter plot.")
                 
-                if name and qty > 0:
+                s_col1, s_col2 = st.columns(2)
+                with s_col1:
+                    standalone_density = st.number_input("Density / Unit Weight (kg/m³)", min_value=0.1, value=7850.0, step=10.0)
+                with s_col2:
+                    standalone_gwp = st.number_input("GWP100 (kgCO2e/kg)", min_value=0.0, value=1.50, step=0.01, format="%.3f")
+                
+                if standalone_density > 0:
+                    valid_adhoc = [{"Material Name": custom_mix_name if custom_mix_name else "New Material", "Quantity": standalone_density, "GWP100 (kgCO2e/kg)": standalone_gwp}]
+                
+                st.markdown("---")
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    preview_mix = st.button("Preview Properties", type="primary")
+                with btn_col2:
+                    save_mix = st.button("Save Custom Material")
+                    
+            else:
+                st.markdown("##### 1. Choose Input Units")
+                unit_mode = st.radio("How are you inputting your mix ingredients?", 
+                                     ["Standard (kg/m³)", "Total Batch Weight (kg)", "US Imperial (lb/yd³)"], 
+                                     horizontal=True)
+                
+                batch_vol = 1.0
+                if unit_mode == "Total Batch Weight (kg)":
+                    batch_vol = st.number_input("What is the total batch volume? (m³):", min_value=0.1, value=1.0, step=0.1)
+                    st.info(f"Your inputs will be automatically divided by {batch_vol} to standardise them to kg/m³.")
+                elif unit_mode == "US Imperial (lb/yd³)":
+                    st.info("Your inputs will be automatically converted to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
+                    
+                st.markdown("##### 2. Standard Ingredients")
+                
+                if not factors_df.empty:
+                    all_comps = factors_df.index.tolist()
+                else:
+                    all_comps = []
+                
+                raw_input_data = {}
+                
+                input_cols = st.columns(4)
+                for i, comp in enumerate(all_comps):
+                    val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, key=f"cust_comp_{comp}")
+                    if val > 0:
+                        raw_input_data[comp] = val
+                        
+                st.markdown("##### 3. Add Custom Ingredients")
+                st.caption("To delete a row, highlight it and press Delete on your keyboard.")
+                
+                if "adhoc_mats" not in st.session_state:
+                    st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
+                    
+                edited_adhoc_df = st.data_editor(
+                    st.session_state.adhoc_mats, 
+                    num_rows="dynamic", 
+                    use_container_width=True,
+                    key="adhoc_editor",
+                    column_order=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"]
+                )
+                
+                for comp, val in raw_input_data.items():
                     if unit_mode == "US Imperial (lb/yd³)":
-                        qty = qty * 0.593276
+                        custom_mix_data[comp] = val * 0.593276
                     elif unit_mode == "Total Batch Weight (kg)":
-                        qty = qty / batch_vol
-                    valid_adhoc.append({"Material Name": name, "Quantity": qty, "GWP100 (kgCO2e/kg)": gwp})
+                        custom_mix_data[comp] = val / batch_vol
+                    else:
+                        custom_mix_data[comp] = val
+                        
+                for _, row in edited_adhoc_df.iterrows():
+                    name = str(row.get("Material Name", "")).strip()
+                    qty = safe_float(row.get("Quantity", 0))
+                    gwp = safe_float(row.get("GWP100 (kgCO2e/kg)", 0))
+                    
+                    if name and qty > 0:
+                        if unit_mode == "US Imperial (lb/yd³)":
+                            qty = qty * 0.593276
+                        elif unit_mode == "Total Batch Weight (kg)":
+                            qty = qty / batch_vol
+                        valid_adhoc.append({"Material Name": name, "Quantity": qty, "GWP100 (kgCO2e/kg)": gwp})
+
+                st.markdown("---")
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    preview_mix = st.button("Preview Mix Properties", type="primary")
+                with btn_col2:
+                    save_mix = st.button("Save Custom Mix")
                 
             if preview_mix and (len(custom_mix_data) > 0 or len(valid_adhoc) > 0):
                 total_mass = 0
@@ -677,46 +703,47 @@ def main_application():
                     total_mass += mass
                     c_data_mass_list.append({"Component": comp, "Mass": mass})
                 
-                st.markdown("##### Live Properties (Standardised to kg/m³)")
+                st.markdown("##### Live Properties (Standardised to 1 m³ volume)")
                 r_col1, r_col2, r_col3 = st.columns(3)
-                r_col1.metric("Total Mass", f"{total_mass:,.2f} kg/m³")
+                r_col1.metric("Total Mass (Density)", f"{total_mass:,.2f} kg/m³")
                 r_col2.metric("GWP100 Factor", f"{(total_gwp / total_mass):,.3f} kgCO2e/kg" if total_mass > 0 else "0")
                 r_col3.metric("GWP100 Total", f"{total_gwp:,.2f} kgCO2e/m³")
                 
-                st.markdown("##### Mix Breakdown Analysis")
-                c_pc_col1, c_pc_col2 = st.columns(2)
-                
-                with c_pc_col1:
-                    st.markdown("**1. By Mass / Weight**")
-                    c_data_mass = pd.DataFrame(c_data_mass_list)
-                    c_pie_mass = alt.Chart(c_data_mass).mark_arc(innerRadius=40).encode(
-                        theta=alt.Theta(field="Mass", type="quantitative"),
-                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                        tooltip=["Component", "Mass"]
-                    ).properties(height=280)
-                    st.altair_chart(c_pie_mass, use_container_width=True)
+                if creation_type == "Multi-Ingredient Mix (e.g., Concrete, Asphalt)":
+                    st.markdown("##### Mix Breakdown Analysis")
+                    c_pc_col1, c_pc_col2 = st.columns(2)
                     
-                with c_pc_col2:
-                    st.markdown("**2. By GWP100 Carbon**")
-                    c_data_carbon = pd.DataFrame({"Component": list(custom_mix_carbon.keys()), "Carbon": list(custom_mix_carbon.values())})
-                    c_pie_carbon = alt.Chart(c_data_carbon).mark_arc(innerRadius=40).encode(
-                        theta=alt.Theta(field="Carbon", type="quantitative"),
-                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                        tooltip=["Component", "Carbon"]
-                    ).properties(height=280)
-                    st.altair_chart(c_pie_carbon, use_container_width=True)
+                    with c_pc_col1:
+                        st.markdown("**1. By Mass / Weight**")
+                        c_data_mass = pd.DataFrame(c_data_mass_list)
+                        c_pie_mass = alt.Chart(c_data_mass).mark_arc(innerRadius=40).encode(
+                            theta=alt.Theta(field="Mass", type="quantitative"),
+                            color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                            tooltip=["Component", "Mass"]
+                        ).properties(height=280)
+                        st.altair_chart(c_pie_mass, use_container_width=True)
+                        
+                    with c_pc_col2:
+                        st.markdown("**2. By GWP100 Carbon**")
+                        c_data_carbon = pd.DataFrame({"Component": list(custom_mix_carbon.keys()), "Carbon": list(custom_mix_carbon.values())})
+                        c_pie_carbon = alt.Chart(c_data_carbon).mark_arc(innerRadius=40).encode(
+                            theta=alt.Theta(field="Carbon", type="quantitative"),
+                            color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                            tooltip=["Component", "Carbon"]
+                        ).properties(height=280)
+                        st.altair_chart(c_pie_carbon, use_container_width=True)
             
             if save_mix:
                 if custom_cat == "--- Select Category ---":
                     st.error("Please assign a category before saving.")
                 elif not custom_mix_name:
-                    st.error("Please provide a name for your custom mix (e.g., C40/50).")
+                    st.error("Please provide a name for your item.")
                 elif len(custom_mix_data) == 0 and len(valid_adhoc) == 0:
-                    st.error("Please add at least one ingredient.")
+                    st.error("Please add at least one ingredient or property.")
                 else:
                     existing_duplicate = [m for m in user_mixes if m['mix_name'] == custom_mix_name and m['category'] == custom_cat]
                     if len(existing_duplicate) > 0:
-                        st.error(f"A mix named '{custom_mix_name}' already exists in the '{custom_cat}' category. Please choose a different name.")
+                        st.error(f"An item named '{custom_mix_name}' already exists in the '{custom_cat}' category. Please choose a different name.")
                     else:
                         mix_payload = {
                             "user_id": st.session_state.user_id,
@@ -727,7 +754,7 @@ def main_application():
                         }
                         try:
                             supabase.table("user_mixes").insert(mix_payload).execute()
-                            st.success(f"Custom mix '{custom_mix_name}' saved successfully. Clearing form...")
+                            st.success(f"'{custom_mix_name}' saved successfully. Clearing form...")
                             
                             for key in list(st.session_state.keys()):
                                 if key.startswith("cust_comp_") or key in ["mix_name_input", "cust_cat", "adhoc_mats"]:
@@ -740,7 +767,7 @@ def main_application():
 
         elif mode == "Compare Mixes":
             st.markdown("#### Compare Materials & Mixes")
-            st.info("Select multiple materials or custom mixes below to analyze their sustainability metrics side-by-side.")
+            st.info("Select multiple materials or custom mixes below to analyse their sustainability metrics side-by-side.")
             
             selected_for_comp = st.multiselect("Select Mixes to Compare:", all_available_mixes, key="compare_multiselect")
             
@@ -759,7 +786,6 @@ def main_application():
                     
                 comp_df = pd.DataFrame(comp_data)
                 
-                # Intelligent Interpretation & Leaderboard logic
                 if len(comp_data) > 1:
                     st.markdown("---")
                     sorted_df = comp_df.sort_values("Total GWP100 (kgCO2e/m³)")
@@ -773,26 +799,31 @@ def main_application():
                         
                     st.markdown(f"""
                     <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-left: 6px solid #1ABC9C; margin-bottom: 20px;">
-                        <h4 style="margin-top: 0; color: #2C3E50;">Sustainability Insight</h4>
+                        <h4 style="margin-top: 0; color: #2C3E50;">Executive Summary & Technical Insight</h4>
                         <p style="font-size: 16px; color: #34495E; line-height: 1.6;">
-                            Based on your selection, <strong>{best['Material']}</strong> is the most environmentally optimized option, 
-                            generating just <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong>. 
-                            <br><br>
-                            Selecting this over the highest-impact material (<strong>{worst['Material']}</strong>) represents a 
-                            <strong>{savings_pct:.1f}% reduction</strong> in embodied carbon per cubic meter. For large-scale volume applications, 
-                            this substitution represents a highly significant opportunity to decarbonize the structure.
-                        </p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        This comparative analysis evaluates the <strong>Embodied Carbon Intensity (ECI)</strong> across your selected structural materials. 
+                        Based on the dataset, <strong>{best['Material']}</strong> demonstrates optimal environmental performance, 
+                        yielding a Global Warming Potential (GWP100) of <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong> at a density of <strong>{best['Total Mass (kg/m³)']:,.2f} kg/m³</strong>.
+                        <br><br>
+                        In contrast, <strong>{worst['Material']}</strong> represents the highest carbon-impact option. 
+                        Specifying the optimal material over the highest-impact alternative yields a 
+                        <strong>{savings_pct:.1f}% reduction</strong> in embodied carbon per unit volume. For large-scale infrastructure applications, 
+                        this material substitution represents a highly effective decarbonisation strategy.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+                st.markdown("##### Visual Analytics")
+                tab_bar, tab_scatter = st.tabs(["Carbon Leaderboard", "Density vs. Carbon Trade-off"])
                 
-                    # Professional Horizontal Bar Chart highlighting the winner
+                with tab_bar:
                     bars = alt.Chart(comp_df).mark_bar(cornerRadiusEnd=4, height=40).encode(
                         x=alt.X("Total GWP100 (kgCO2e/m³):Q", title="Global Warming Potential (kgCO2e/m³)", scale=alt.Scale(domain=[0, comp_df["Total GWP100 (kgCO2e/m³)"].max() * 1.15])),
                         y=alt.Y("Material:N", sort="-x", title=""),
                         color=alt.condition(
                             alt.datum['Total GWP100 (kgCO2e/m³)'] == best['Total GWP100 (kgCO2e/m³)'],
-                            alt.value('#27ae60'),  # Highlight the best in green
-                            alt.value('#95a5a6')   # Others in grey
+                            alt.value('#27ae60'),  
+                            alt.value('#95a5a6')   
                         ),
                         tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
                     )
@@ -804,15 +835,57 @@ def main_application():
                     ).encode(
                         text=alt.Text('Total GWP100 (kgCO2e/m³):Q', format=',.2f')
                     )
-                    st.altair_chart(bars + text, use_container_width=True)
-                
-                # Raw Data Table
-                st.markdown("##### Detailed Metric Breakdown")
-                display_df = comp_df.copy()
-                for col in ["Total Mass (kg/m³)", "GWP100 Factor (kgCO2e/kg)", "Total GWP100 (kgCO2e/m³)"]:
-                    display_df[col] = display_df[col].apply(lambda x: f"{float(x):,.2f}")
+                    final_bar_chart = (bars + text).properties(height=alt.Step(60))
+                    st.altair_chart(final_bar_chart, use_container_width=True)
                     
-                st.table(display_df.set_index("Material"))
+                with tab_scatter:
+                    scatter = alt.Chart(comp_df).mark_circle(size=200).encode(
+                        x=alt.X("Total Mass (kg/m³):Q", title="Density / Mass (kg/m³)", scale=alt.Scale(zero=False, padding=20)),
+                        y=alt.Y("Total GWP100 (kgCO2e/m³):Q", title="Total GWP100 (kgCO2e/m³)", scale=alt.Scale(zero=False, padding=20)),
+                        color=alt.Color("Material:N", legend=alt.Legend(title="Material")),
+                        tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
+                    ).properties(height=350)
+                    st.altair_chart(scatter, use_container_width=True)
+            
+            st.markdown("##### Detailed Metric Breakdown & Data Export")
+            
+            def highlight_best(s):
+                is_min = s == s.min()
+                return ['background-color: #d4edda; color: #155724; font-weight: bold' if v else '' for v in is_min]
+                
+            display_df = comp_df.set_index("Material")
+            styled_df = display_df.style.apply(highlight_best).format({
+                "Total Mass (kg/m³)": "{:,.2f}",
+                "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
+                "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
+            })
+            st.table(styled_df)
+            
+            if len(comp_data) > 1:
+                st.markdown("<br>", unsafe_allow_html=True)
+                col_csv, col_pdf, _ = st.columns([1, 1, 1.5])
+                
+                csv_data = comp_df.to_csv(index=False).encode('utf-8')
+                col_csv.download_button(
+                    label="📄 Download Data (CSV)",
+                    data=csv_data,
+                    file_name="material_comparison.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+                
+                if HAS_FPDF:
+                    pdf_bytes = generate_pdf_report(comp_df, best, worst, savings_pct)
+                    if pdf_bytes:
+                        col_pdf.download_button(
+                            label="📊 Download PDF Report",
+                            data=pdf_bytes,
+                            file_name="sustainability_report.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                else:
+                    col_pdf.info("ℹ️ To enable PDF export, run `pip install fpdf` on your server.")
 
     # ---------------------------------------------------------
     # TAB 2: PROJECT ASSESSMENT
