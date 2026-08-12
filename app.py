@@ -100,7 +100,6 @@ def load_database():
     if SHEET_ID and len(SHEET_ID) > 20: 
         export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
         try:
-            # Added a 10-second timeout so the app never freezes!
             response = requests.get(export_url, timeout=10)
             response.raise_for_status()
             excel_data = BytesIO(response.content)
@@ -174,10 +173,42 @@ def load_project_to_session(p_data, db):
     st.session_state.draft_structure = p_data['structure_type']
     st.session_state.project_results_df = None # Clear old results so they must recalculate
     
+    known_components = []
+    if db is not None and not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
+        known_components = db["unit_logic"]["Component_Name"].dropna().astype(str).str.strip().tolist()
+        
     new_draft = []
-    for c_data in p_data.get("component_data", []):
+    
+    # 1. Properly Handle Legacy Dict Format AND New List Format
+    raw_comp_data = p_data.get("component_data", [])
+    if isinstance(raw_comp_data, dict):
+        # Convert legacy dictionary format into the modern list structure
+        converted_list = []
+        for c_name, c_details in raw_comp_data.items():
+            converted_list.append({
+                "component_name": c_name,
+                "multiplier_count": 1,
+                "materials": [{
+                    "label": "",
+                    "quantity": c_details.get("quantity", 0.0),
+                    "unit": c_details.get("unit", "m3"),
+                    "assigned_mix": c_details.get("assigned_mix", "--- Select ---")
+                }]
+            })
+        raw_comp_data = converted_list
+        
+    # 2. Rebuild the UI Data 
+    for c_data in raw_comp_data:
         c_name = c_data.get("component_name", "Unknown")
-        b_name = c_data.get("base_name", c_name) # Fetch the original base_name
+        b_name = c_data.get("base_name") 
+        
+        # Legacy Support: If base_name wasn't saved in older projects, guess it from the custom name
+        if not b_name:
+            b_name = "Extra"  # Failsafe
+            for kc in known_components:
+                if kc.lower() in c_name.lower():
+                    b_name = kc
+                    break
         
         mats = []
         for m_data in c_data.get("materials", []):
@@ -248,16 +279,14 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
             if not match_direct.empty:
                 direct_row = match_direct.iloc[0]
                 m_mass = safe_float(direct_row.get("Total_Mass_kg_m3", 1.0)) 
+                if m_mass == 0: m_mass = 1.0 
                 
-                # Fetch GWP
                 m_gwp = safe_float(direct_row.get("GWP100_kgCO2e_m3", 0.0))
                 if m_gwp == 0.0: m_gwp = safe_float(direct_row.get("ECFGWP100_kgCO2e_kg", 0.0)) * m_mass
                 
-                # Fetch EE
                 m_ee = safe_float(direct_row.get("EE_GJ_m3", 0.0)) * 1000 
                 if m_ee == 0.0: m_ee = safe_float(direct_row.get("EEF_MJ_kg", 0.0)) * m_mass
                 
-                # Fetch EC
                 m_ec = safe_float(direct_row.get("EC_kgCO2_m3", 0.0))
                 if m_ec == 0.0: m_ec = safe_float(direct_row.get("ECF_kgCO2_kg", 0.0)) * m_mass
                     
@@ -652,6 +681,8 @@ def main_application():
         
         with col_proj_details:
             st.markdown("### 1. Project Details & Structure")
+            st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name, placeholder="Enter project name...")
+            
         with col_clear:
             st.markdown("<br>", unsafe_allow_html=True)
             if not st.session_state.get("confirm_clear_all", False):
@@ -672,8 +703,6 @@ def main_application():
                     st.session_state.confirm_clear_all = False
                     st.rerun()
         
-        st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name, placeholder="Enter project name...")
-
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
         
         try:
@@ -697,6 +726,16 @@ def main_application():
                     component_list = [c.strip() for c in components_str.split(",") if "Extra" not in c.strip()]
                     
                     for comp in component_list:
+                        # Safely extract the default unit directly from the Google Sheet
+                        default_unit = "m3"
+                        if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
+                            match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp).strip().lower()
+                            unit_row = db["unit_logic"][match_mask]
+                            if not unit_row.empty and "Default_Unit" in unit_row.columns:
+                                val = str(unit_row["Default_Unit"].values[0]).strip()
+                                if val and val.lower() != "nan":
+                                    default_unit = val
+
                         st.session_state.draft_components.append({
                             "id": str(uuid.uuid4()),
                             "base_name": comp,
@@ -706,7 +745,7 @@ def main_application():
                                 "id": str(uuid.uuid4()),
                                 "label": "",
                                 "qty": 0.0,
-                                "unit": "m3",
+                                "unit": default_unit,
                                 "mix": "--- Select ---"
                             }]
                         })
@@ -738,13 +777,22 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                # Universal fallback list so users are never trapped with just m3
-                units = ["m3", "tonnes", "kg", "L", "m", "m2", "units", "% by vol.", "% of wt.", "% by conc. vol."]
+                # The Master Fallback List (Always fully accessible)
+                master_units = ["m3", "tonnes", "kg", "L", "m", "m2", "units", "% by vol.", "% of wt.", "% by conc. vol."]
+                sheet_units = []
+                
+                # Fetch specific unit options dynamically from Google Sheets to place at the top of the list
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
-                    unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp["base_name"]]
+                    match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp["base_name"]).strip().lower()
+                    unit_row = db["unit_logic"][match_mask]
                     if not unit_row.empty and "Unit_Options" in unit_row.columns:
-                        # Clean spaces from the excel text so they map correctly
-                        units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
+                        sheet_units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
+
+                # Combine the Google Sheet specific units with the master list to guarantee absolute freedom
+                units = []
+                for u in sheet_units + master_units:
+                    if u not in units:
+                        units.append(u)
 
                 mats_to_remove = []
                 
@@ -759,7 +807,10 @@ def main_application():
                     with col_qty:
                         mat["qty"] = st.number_input("Amount", min_value=0.0, step=0.1, value=float(mat.get("qty", 0.0)), key=f"qty_{mat['id']}")
                     with col_unit:
-                        mat["unit"] = st.selectbox("Unit", units, index=units.index(mat["unit"]) if mat["unit"] in units else 0, key=f"unit_{mat['id']}")
+                        # Append their uniquely saved unit in case they are duplicating an old/unusual project
+                        if mat["unit"] not in units:
+                            units.append(mat["unit"])
+                        mat["unit"] = st.selectbox("Unit", units, index=units.index(mat["unit"]), key=f"unit_{mat['id']}")
                     with col_del:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if len(comp["materials"]) > 1: 
@@ -809,8 +860,8 @@ def main_application():
 
             st.markdown("---")
             
-            # THE GREEN CALCULATE BUTTON
-            if st.button("Calculate Project Totals", key="calc_btn_hidden", type="primary", use_container_width=True):
+            # Step 1: Calculate Project Totals
+            if st.button("Calculate Project Totals", type="primary", use_container_width=True):
                 with st.spinner("Processing calculations..."):
                     results_list = []
                     grand_totals = {"mass": 0.0, "ee": 0.0, "ec": 0.0, "gwp": 0.0}
@@ -937,25 +988,20 @@ def main_application():
                         st.error("Please assign at least one material with an amount > 0.")
                     st.rerun()
 
-            # --- RESULTS DISPLAY ---
+            # --- RESULTS DISPLAY & SAVE BUTTON ---
             if st.session_state.project_results_df is not None:
                 st.markdown("---")
-                st.markdown("### 3. Calculation Results")
                 
-                # Format dataframe for exact visual match with the screenshot
+                # Render using st.table for the classic, static engineering report look
                 display_df = st.session_state.project_results_df.copy()
-                
-                # Start index at 1 (instead of 0) to match the PySide6 table row numbers
                 display_df.index = display_df.index + 1 
                 
-                # Format numbers cleanly with commas and 2 decimal places for the table
                 display_df["Volume"] = display_df["Volume"].apply(lambda x: f"{float(x):,.2f}")
                 display_df["Total Mass (kg)"] = display_df["Total Mass (kg)"].apply(lambda x: f"{float(x):,.2f}")
                 display_df["Total EE (GJ)"] = display_df["Total EE (GJ)"].apply(lambda x: f"{float(x):,.2f}")
                 display_df["Total EC (kgCO2)"] = display_df["Total EC (kgCO2)"].apply(lambda x: f"{float(x):,.2f}")
                 display_df["Total GWP100 (kgCO2e)"] = display_df["Total GWP100 (kgCO2e)"].apply(lambda x: f"{float(x):,.2f}")
                 
-                # Render using st.table for the classic, static engineering report look
                 st.table(display_df)
                 
                 # Render Grand Totals in a styled HTML box matching the PySide6 UI exactly
@@ -972,31 +1018,25 @@ def main_application():
                 """
                 st.markdown(totals_html, unsafe_allow_html=True)
                 
-                st.markdown("---")
-                st.markdown("### 4. Save Project")
-                
-                s_col1, s_col2 = st.columns([3, 1])
-                with s_col1:
-                    st.info(f"Saving as: **{st.session_state.draft_proj_name}** (To rename, edit the Project Name at the top of the page)")
-                with s_col2:
-                    if st.button("Save to Account", type="primary", use_container_width=True):
-                        if not st.session_state.draft_proj_name:
-                            st.error("Please enter a Project Name at the top of the page to save.")
+                # Step 2: Save Project Button
+                if st.button("Save Project"):
+                    if not st.session_state.draft_proj_name:
+                        st.error("Please enter a Project Name at the top of the page to save.")
+                    else:
+                        projects_res = supabase.table("saved_projects").select("id, project_name").eq("user_id", st.session_state.user_id).execute()
+                        local_user_projects = projects_res.data if projects_res.data else []
+                        
+                        existing_project = next((p for p in local_user_projects if p['project_name'] == st.session_state.draft_proj_name), None)
+                        
+                        if existing_project:
+                            st.session_state.confirm_overwrite_name = st.session_state.draft_proj_name
+                            st.session_state.existing_proj_id = existing_project['id']
+                            st.rerun()
                         else:
-                            projects_res = supabase.table("saved_projects").select("id, project_name").eq("user_id", st.session_state.user_id).execute()
-                            local_user_projects = projects_res.data if projects_res.data else []
-                            
-                            existing_project = next((p for p in local_user_projects if p['project_name'] == st.session_state.draft_proj_name), None)
-                            
-                            if existing_project:
-                                st.session_state.confirm_overwrite_name = st.session_state.draft_proj_name
-                                st.session_state.existing_proj_id = existing_project['id']
-                                st.rerun()
-                            else:
-                                st.session_state.execute_save = True
-                                st.rerun()
+                            st.session_state.execute_save = True
+                            st.rerun()
                 
-                # Conflict Resolution
+                # Conflict Resolution Dialog
                 if st.session_state.get("confirm_overwrite_name"):
                     st.warning(f"A project named '{st.session_state.confirm_overwrite_name}' already exists. Do you want to overwrite it?")
                     col_y, col_n = st.columns(2)
@@ -1025,7 +1065,6 @@ def main_application():
                             supabase.table("saved_projects").insert(project_payload).execute()
                             st.success(f"Project '{st.session_state.draft_proj_name}' saved successfully to your account.")
                             
-                        # Do NOT clear the UI or the table so the user can still see their work!
                         st.session_state.execute_save = False
                         st.session_state.existing_proj_id = None
                         
