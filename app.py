@@ -207,17 +207,18 @@ def load_project_to_session(p_data, db):
     st.session_state.draft_components = new_draft
 
 def get_unit_logic_type(unit_string):
+    """Dynamically determines math logic based on the user's unit selection."""
     s = str(unit_string).lower()
     if "%" in s:
         if "wt" in s or "weight" in s: return "PERCENT_WEIGHT"
         return "PERCENT_VOL"
     if "/ unit" in s: return "PER_UNIT"
-    if "l/m3" in s: return "UHPC_REF_VOL" 
-    if s.strip() == "l": return "BASIC_LITER"
+    if "l/m3" in s: return "LITER_PER_M3" 
+    if s.strip() == "l" or s.strip() == "liters": return "BASIC_LITER"
     return "BASIC"
 
 def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
-    """Engine fetching only Mass and GWP100 metrics for a specific material mix."""
+    """Engine fetching Mass and GWP100 metrics for a specific material mix."""
     m_mass, m_gwp = 0.0, 0.0
     
     if mix_name.startswith("Custom: "):
@@ -289,13 +290,13 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 
                 total_mass_kg = 0.0
                 
-                if logic_type == "PERCENT_VOL" or logic_type == "UHPC_REF_VOL" or logic_type == "PERCENT_WEIGHT":
+                if logic_type == "PERCENT_VOL" or logic_type == "LITER_PER_M3" or logic_type == "PERCENT_WEIGHT":
                     actual_ref_val = (ref_val * c_multiplier) if ref_per_unit else ref_val
                     
                     if logic_type == "PERCENT_VOL":
                         vol_m3 = (qty / 100.0) * actual_ref_val
                         total_mass_kg = vol_m3 * mass_per_m3
-                    elif logic_type == "UHPC_REF_VOL":
+                    elif logic_type == "LITER_PER_M3":
                         vol_L = qty * actual_ref_val
                         total_mass_kg = (vol_L / 1000.0) * mass_per_m3
                     elif logic_type == "PERCENT_WEIGHT":
@@ -320,7 +321,7 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 
                 item_label = f"{comp_idx + 1}. {c_name} {mat.get('label', '')}".strip()
                 
-                if logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "UHPC_REF_VOL"]:
+                if logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "LITER_PER_M3"]:
                     mult_tag = " × Qty" if ref_per_unit else ""
                     display_qty = f"{qty} (Ref: {ref_val}{mult_tag})"
                 else:
@@ -383,7 +384,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 140px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Materials & Mixes</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The master library. Configure ingredients, build custom mixes, and view material properties.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The master library. Configure ingredients, build custom mixes, and compare properties.</p>
         </div><br>""", unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_mats", use_container_width=True):
             st.session_state.current_page = "Materials & Mixes"
@@ -402,11 +403,11 @@ def welcome_dashboard():
     with col3:
         st.markdown("""
         <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 140px;">
-            <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The completed portfolio. Review, analyse, or duplicate previously completed structure assessments.</p>
+            <h3 style="color: #2C3E50; margin-top: 0;">My Library</h3>
+            <p style="color: #5D6D7E; font-size: 14px;">Your historical portfolio. Review, analyze, and manage your saved projects and custom mixes.</p>
         </div><br>""", unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_saved", use_container_width=True):
-            st.session_state.current_page = "Saved Projects"
+            st.session_state.current_page = "My Library"
             st.rerun()
 
 def main_application():
@@ -431,9 +432,9 @@ def main_application():
 
     st.sidebar.markdown("---")
     
-    st.sidebar.radio("Navigation", ["Materials & Mixes", "Project Assessment", "Saved Projects"], 
+    st.sidebar.radio("Navigation", ["Materials & Mixes", "Project Assessment", "My Library"], 
                      key="nav_radio", 
-                     index=["Materials & Mixes", "Project Assessment", "Saved Projects"].index(st.session_state.current_page),
+                     index=["Materials & Mixes", "Project Assessment", "My Library"].index(st.session_state.current_page),
                      on_change=lambda: st.session_state.update(current_page=st.session_state.nav_radio),
                      label_visibility="collapsed")
     
@@ -463,7 +464,7 @@ def main_application():
     # ---------------------------------------------------------
     if st.session_state.current_page == "Materials & Mixes":
 
-        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix", "Manage Saved Mixes", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
+        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -608,7 +609,7 @@ def main_application():
                     raw_input_data[comp] = val
                     
             st.markdown("##### 3. Add Custom Ingredients")
-            st.caption("To delete a row, click the grey box on the far left edge of the row to highlight it, then press Delete on your keyboard.")
+            st.caption("To delete a row, highlight it and press Delete on your keyboard.")
             
             if "adhoc_mats" not in st.session_state:
                 st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
@@ -736,36 +737,10 @@ def main_application():
                             st.rerun() 
                         except Exception as e:
                             st.error(f"Database Save Error: Details: {e}")
-                            
-        elif mode == "Manage Saved Mixes":
-            st.markdown("#### Manage Your Custom Mixes")
-            
-            if not user_mixes:
-                st.info("No custom mixes found on your account.")
-            else:
-                for m in user_mixes:
-                    with st.expander(f"{m['mix_name']} (Category: {m['category']})"):
-                        
-                        col_rn, col_del = st.columns([2, 1])
-                        with col_rn:
-                            new_m_name = st.text_input("Rename Mix:", value=m['mix_name'], key=f"rn_in_{m['id']}")
-                            if st.button("Update Name", key=f"rn_btn_{m['id']}"):
-                                supabase.table("user_mixes").update({"mix_name": new_m_name}).eq("id", m['id']).execute()
-                                st.success("Mix renamed successfully!")
-                                time.sleep(1)
-                                st.rerun()
-                                
-                        with col_del:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            if st.button("Delete Mix", key=f"del_m_{m['id']}"):
-                                supabase.table("user_mixes").delete().eq("id", m['id']).execute()
-                                st.success("Mix deleted.")
-                                time.sleep(1)
-                                st.rerun()
 
         elif mode == "Compare Mixes":
             st.markdown("#### Compare Materials & Mixes")
-            st.info("Select multiple materials or custom mixes below to compare their environmental impacts side-by-side.")
+            st.info("Select multiple materials or custom mixes below to analyze their sustainability metrics side-by-side.")
             
             selected_for_comp = st.multiselect("Select Mixes to Compare:", all_available_mixes, key="compare_multiselect")
             
@@ -784,20 +759,60 @@ def main_application():
                     
                 comp_df = pd.DataFrame(comp_data)
                 
+                # Intelligent Interpretation & Leaderboard logic
+                if len(comp_data) > 1:
+                    st.markdown("---")
+                    sorted_df = comp_df.sort_values("Total GWP100 (kgCO2e/m³)")
+                    best = sorted_df.iloc[0]
+                    worst = sorted_df.iloc[-1]
+                    
+                    if worst["Total GWP100 (kgCO2e/m³)"] > 0:
+                        savings_pct = ((worst["Total GWP100 (kgCO2e/m³)"] - best["Total GWP100 (kgCO2e/m³)"]) / worst["Total GWP100 (kgCO2e/m³)"]) * 100
+                    else:
+                        savings_pct = 0
+                        
+                    st.markdown(f"""
+                    <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-left: 6px solid #1ABC9C; margin-bottom: 20px;">
+                        <h4 style="margin-top: 0; color: #2C3E50;">Sustainability Insight</h4>
+                        <p style="font-size: 16px; color: #34495E; line-height: 1.6;">
+                            Based on your selection, <strong>{best['Material']}</strong> is the most environmentally optimized option, 
+                            generating just <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong>. 
+                            <br><br>
+                            Selecting this over the highest-impact material (<strong>{worst['Material']}</strong>) represents a 
+                            <strong>{savings_pct:.1f}% reduction</strong> in embodied carbon per cubic meter. For large-scale volume applications, 
+                            this substitution represents a highly significant opportunity to decarbonize the structure.
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                    # Professional Horizontal Bar Chart highlighting the winner
+                    bars = alt.Chart(comp_df).mark_bar(cornerRadiusEnd=4, height=40).encode(
+                        x=alt.X("Total GWP100 (kgCO2e/m³):Q", title="Global Warming Potential (kgCO2e/m³)", scale=alt.Scale(domain=[0, comp_df["Total GWP100 (kgCO2e/m³)"].max() * 1.15])),
+                        y=alt.Y("Material:N", sort="-x", title=""),
+                        color=alt.condition(
+                            alt.datum['Total GWP100 (kgCO2e/m³)'] == best['Total GWP100 (kgCO2e/m³)'],
+                            alt.value('#27ae60'),  # Highlight the best in green
+                            alt.value('#95a5a6')   # Others in grey
+                        ),
+                        tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
+                    )
+                    text = bars.mark_text(
+                        align='left',
+                        baseline='middle',
+                        dx=5,
+                        fontWeight='bold'
+                    ).encode(
+                        text=alt.Text('Total GWP100 (kgCO2e/m³):Q', format=',.2f')
+                    )
+                    st.altair_chart(bars + text, use_container_width=True)
+                
+                # Raw Data Table
+                st.markdown("##### Detailed Metric Breakdown")
                 display_df = comp_df.copy()
                 for col in ["Total Mass (kg/m³)", "GWP100 Factor (kgCO2e/kg)", "Total GWP100 (kgCO2e/m³)"]:
                     display_df[col] = display_df[col].apply(lambda x: f"{float(x):,.2f}")
                     
                 st.table(display_df.set_index("Material"))
-                
-                st.markdown("##### GWP100 Comparison (kgCO2e/m³)")
-                bar_chart = alt.Chart(comp_df).mark_bar(color="#4CAF50").encode(
-                    x=alt.X("Material:N", sort=None, axis=alt.Axis(labelAngle=-45)),
-                    y=alt.Y("Total GWP100 (kgCO2e/m³):Q", title="kgCO2e per m³"),
-                    tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
-                ).properties(height=350)
-                
-                st.altair_chart(bar_chart, use_container_width=True)
 
     # ---------------------------------------------------------
     # TAB 2: PROJECT ASSESSMENT
@@ -905,8 +920,8 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                # Unrestricted master list including all user preferences
-                units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "m", "m2", "units", "% by volume", "% by weight"]
+                # Giant unrestricted universal dropdown list
+                units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "% by volume", "% by weight", "m", "m2", "units"]
                 
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp["base_name"]).strip().lower()
@@ -921,13 +936,13 @@ def main_application():
                 
                 for mat in comp["materials"]:
                     
-                    # Fetch immediate widget state to prevent 1-click lag for dynamic pop-ups
+                    # Fetch immediate widget state to make popups instant
                     unit_key = f"unit_{mat['id']}"
                     if unit_key in st.session_state:
                         mat["unit"] = st.session_state[unit_key]
                         
                     logic_type = get_unit_logic_type(mat["unit"])
-                    needs_ref = logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "UHPC_REF_VOL"]
+                    needs_ref = logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "LITER_PER_M3"]
                     
                     if needs_ref:
                         col_label, col_mix, col_qty, col_unit, col_ref, col_mult, col_del = st.columns([1.8, 2.2, 1.0, 1.2, 1.2, 0.8, 0.8])
@@ -1088,108 +1103,171 @@ def main_application():
                         st.session_state.execute_save = False
 
     # ---------------------------------------------------------
-    # TAB 3: SAVED PROJECTS 
+    # TAB 3: MY LIBRARY (Saved Projects & Mixes)
     # ---------------------------------------------------------
-    elif st.session_state.current_page == "Saved Projects":
-        st.markdown("### Your Project Library")
+    elif st.session_state.current_page == "My Library":
         
-        projects_res = supabase.table("saved_projects").select("*").eq("user_id", st.session_state.user_id).execute()
-        user_projects = projects_res.data if projects_res.data else []
+        tab_proj, tab_mix = st.tabs(["Project Portfolio", "Custom Mix Library"])
         
-        if user_projects:
-            for p in user_projects:
-                with st.expander(f"{p['project_name']} | Structure: {p['structure_type']} | GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e"):
-                    
-                    draft_comps = []
-                    raw_data = p.get("component_data", [])
-                    if isinstance(raw_data, dict):
-                        for c_name, c_details in raw_data.items():
-                            draft_comps.append({
-                                "custom_name": c_name,
-                                "base_name": "Extra",
-                                "count": 1,
-                                "materials": [{
-                                    "label": "",
-                                    "qty": c_details.get("quantity", 0.0),
-                                    "unit": c_details.get("unit", "m3"),
-                                    "ref_value": c_details.get("ref_value", 0.0),
-                                    "ref_per_unit": c_details.get("ref_per_unit", False),
-                                    "mix": c_details.get("assigned_mix", "")
-                                }]
-                            })
-                    else:
-                        for comp in raw_data:
-                            mats = []
-                            for mat in comp.get("materials", []):
-                                mats.append({
-                                    "label": mat.get("label", ""),
-                                    "qty": mat.get("quantity", 0.0),
-                                    "unit": mat.get("unit", "m3"),
-                                    "ref_value": mat.get("ref_value", 0.0),
-                                    "ref_per_unit": mat.get("ref_per_unit", False),
-                                    "mix": mat.get("assigned_mix", "")
+        with tab_proj:
+            st.markdown("### Your Project Portfolio")
+            
+            projects_res = supabase.table("saved_projects").select("*").eq("user_id", st.session_state.user_id).execute()
+            user_projects = projects_res.data if projects_res.data else []
+            
+            if user_projects:
+                for p in user_projects:
+                    with st.expander(f"🏗️ {p['project_name']} | Structure: {p['structure_type']} | GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e"):
+                        
+                        draft_comps = []
+                        raw_data = p.get("component_data", [])
+                        if isinstance(raw_data, dict):
+                            for c_name, c_details in raw_data.items():
+                                draft_comps.append({
+                                    "custom_name": c_name,
+                                    "base_name": "Extra",
+                                    "count": 1,
+                                    "materials": [{
+                                        "label": "",
+                                        "qty": c_details.get("quantity", 0.0),
+                                        "unit": c_details.get("unit", "m3"),
+                                        "ref_value": c_details.get("ref_value", 0.0),
+                                        "ref_per_unit": c_details.get("ref_per_unit", False),
+                                        "mix": c_details.get("assigned_mix", "")
+                                    }]
                                 })
-                            draft_comps.append({
-                                "base_name": comp.get("base_name", "Extra"),
-                                "custom_name": comp.get("component_name", ""),
-                                "count": comp.get("multiplier_count", 1),
-                                "materials": mats
-                            })
-
-                    df, totals, _ = calculate_project_data(draft_comps, db, user_mixes, factors_df)
-                    
-                    if df is not None:
-                        render_results_table_and_totals(df, totals)
-                    else:
-                        st.info("No calculable materials found in this project.")
-                    
-                    st.markdown("---")
-                    
-                    proj_id = p.get('id', str(p.get('project_name')))
-                    del_key = f"del_proj_confirm_{proj_id}"
-                    
-                    btn_col_rn, btn_col_a, btn_col_b = st.columns([2, 1.5, 1.5])
-                    
-                    with btn_col_rn:
-                        new_p_name = st.text_input("Rename Project:", value=p['project_name'], key=f"rn_p_{proj_id}")
-                        if st.button("Update Name", key=f"btn_rn_{proj_id}"):
-                            supabase.table("saved_projects").update({"project_name": new_p_name}).eq("id", proj_id).execute()
-                            st.success("Project renamed!")
-                            time.sleep(1)
-                            st.rerun()
-                    
-                    with btn_col_a:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        st.button(
-                            "Duplicate and Edit", 
-                            key=f"load_proj_{proj_id}", 
-                            on_click=load_project_to_session, 
-                            args=(p, db)
-                        )
-                            
-                    with btn_col_b:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if not st.session_state.get(del_key, False):
-                            if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
-                                st.session_state[del_key] = True
-                                st.rerun()
                         else:
-                            st.warning("Are you sure? This cannot be undone.")
-                            y_col, n_col = st.columns(2)
-                            if y_col.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
-                                if 'id' in p:
-                                    supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
-                                    st.session_state[del_key] = False
-                                    st.success("Project deleted.")
+                            for comp in raw_data:
+                                mats = []
+                                for mat in comp.get("materials", []):
+                                    mats.append({
+                                        "label": mat.get("label", ""),
+                                        "qty": mat.get("quantity", 0.0),
+                                        "unit": mat.get("unit", "m3"),
+                                        "ref_value": mat.get("ref_value", 0.0),
+                                        "ref_per_unit": mat.get("ref_per_unit", False),
+                                        "mix": mat.get("assigned_mix", "")
+                                    })
+                                draft_comps.append({
+                                    "base_name": comp.get("base_name", "Extra"),
+                                    "custom_name": comp.get("component_name", ""),
+                                    "count": comp.get("multiplier_count", 1),
+                                    "materials": mats
+                                })
+
+                        # Send the saved data back through the engine to render the perfect table
+                        df, totals, _ = calculate_project_data(draft_comps, db, user_mixes, factors_df)
+                        
+                        if df is not None:
+                            render_results_table_and_totals(df, totals)
+                        else:
+                            st.info("No calculable materials found in this project.")
+                        
+                        st.markdown("---")
+                        
+                        proj_id = p.get('id', str(p.get('project_name')))
+                        del_key = f"del_proj_confirm_{proj_id}"
+                        
+                        btn_col_rn, btn_col_a, btn_col_b = st.columns([2, 1.5, 1.5])
+                        
+                        with btn_col_rn:
+                            new_p_name = st.text_input("Rename Project:", value=p['project_name'], key=f"rn_p_{proj_id}")
+                            if st.button("Update Name", key=f"btn_rn_{proj_id}"):
+                                try:
+                                    supabase.table("saved_projects").update({"project_name": new_p_name}).eq("id", proj_id).execute()
+                                    st.success("Project renamed!")
                                     time.sleep(1)
                                     st.rerun()
-                                else:
-                                    st.error("Missing 'id' column.")
-                            if n_col.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
-                                st.session_state[del_key] = False
+                                except Exception as e:
+                                    st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
+                        
+                        with btn_col_a:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            st.button(
+                                "Duplicate and Edit", 
+                                key=f"load_proj_{proj_id}", 
+                                on_click=load_project_to_session, 
+                                args=(p, db)
+                            )
+                                
+                        with btn_col_b:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if not st.session_state.get(del_key, False):
+                                if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
+                                    st.session_state[del_key] = True
+                                    st.rerun()
+                            else:
+                                st.warning("Are you sure? This cannot be undone.")
+                                y_col, n_col = st.columns(2)
+                                if y_col.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
+                                    if 'id' in p:
+                                        supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
+                                        st.session_state[del_key] = False
+                                        st.success("Project deleted.")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error("Missing 'id' column.")
+                                if n_col.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
+                                    st.session_state[del_key] = False
+                                    st.rerun()
+            else:
+                st.info("No projects saved under your account yet.")
+
+        with tab_mix:
+            st.markdown("### Your Custom Mixes")
+            
+            if not user_mixes:
+                st.info("No custom mixes found on your account. Create one in 'Materials & Mixes'!")
+            else:
+                for m in user_mixes:
+                    with st.expander(f"🧪 {m['mix_name']} (Category: {m['category']})"):
+                        
+                        # Calculate and Display Live Properties
+                        c_mix_name = f"Custom: {m['mix_name']}"
+                        props = calculate_mix_carbon(c_mix_name, db, user_mixes, factors_df)
+                        
+                        st.markdown("##### Performance Metrics")
+                        m_col1, m_col2, m_col3 = st.columns(3)
+                        m_col1.metric("Total Mass", f"{props['Mass (kg/m3)']:,.2f} kg/m³")
+                        m_col2.metric("GWP100 Factor", f"{props['Factor_GWP (kgCO2e/kg)']:,.3f} kgCO2e/kg")
+                        m_col3.metric("GWP100 Total", f"{props['Factor_GWP (kgCO2e/kg)'] * props['Mass (kg/m3)']:,.2f} kgCO2e/m³")
+                        
+                        # Display Mix Recipe
+                        st.markdown("##### Ingredient Recipe")
+                        recipe_data = []
+                        if m.get("components"):
+                            for c, val in m["components"].items():
+                                if val > 0: recipe_data.append({"Material": c, "Quantity": val, "Type": "Standard"})
+                        if m.get("adhoc_materials"):
+                            for adhoc in m["adhoc_materials"]:
+                                recipe_data.append({"Material": adhoc["Material Name"], "Quantity": adhoc["Quantity"], "Type": "Custom"})
+                        
+                        if recipe_data:
+                            st.dataframe(pd.DataFrame(recipe_data), use_container_width=True, hide_index=True)
+                        
+                        st.markdown("---")
+                        
+                        # Rename and Delete Actions
+                        col_rn, col_del = st.columns([2, 1])
+                        with col_rn:
+                            new_m_name = st.text_input("Rename Mix:", value=m['mix_name'], key=f"rn_in_{m['id']}")
+                            if st.button("Update Name", key=f"rn_btn_{m['id']}"):
+                                try:
+                                    supabase.table("user_mixes").update({"mix_name": new_m_name}).eq("id", m['id']).execute()
+                                    st.success("Mix renamed successfully!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
+                                
+                        with col_del:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if st.button("Delete Mix", key=f"del_m_{m['id']}"):
+                                supabase.table("user_mixes").delete().eq("id", m['id']).execute()
+                                st.success("Mix deleted.")
+                                time.sleep(1)
                                 st.rerun()
-        else:
-            st.info("No projects saved under your account yet.")
 
 if st.session_state.user_id is None:
     login_page()
