@@ -9,20 +9,31 @@ import uuid
 
 st.set_page_config(page_title="Sustainability Assessment System", layout="wide")
 
-# Custom CSS for the green calculate button
+# Custom CSS for the green calculate button and table formatting
 st.markdown("""
 <style>
-div.stButton > button.btn-calculate {
+/* Target the Streamlit primary button specifically */
+div[data-testid="stButton"] > button[kind="primary"] {
     background-color: #4CAF50;
     color: white;
-    width: 100%;
     padding: 15px;
     font-size: 18px;
     font-weight: bold;
     border-radius: 8px;
+    border: none;
 }
-div.stButton > button.btn-calculate:hover {
+div[data-testid="stButton"] > button[kind="primary"]:hover {
     background-color: #45a049;
+}
+/* Style static tables to look like the engineering report */
+.stTable {
+    background-color: white;
+}
+th {
+    background-color: #e0e0e0 !important;
+    color: black !important;
+    font-weight: bold !important;
+    text-align: center !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -631,7 +642,7 @@ def main_application():
         col_proj_details, col_clear = st.columns([3, 1])
         
         with col_proj_details:
-            st.markdown("### 1. Structure Selection")
+            st.markdown("### 1. Project Details & Structure")
         with col_clear:
             st.markdown("<br>", unsafe_allow_html=True)
             if not st.session_state.get("confirm_clear_all", False):
@@ -652,6 +663,8 @@ def main_application():
                     st.session_state.confirm_clear_all = False
                     st.rerun()
         
+        st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name, placeholder="Enter project name...")
+
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
         
         try:
@@ -786,8 +799,6 @@ def main_application():
             st.markdown("---")
             
             # THE GREEN CALCULATE BUTTON
-            st.markdown('<button class="btn-calculate">Calculate Project Totals</button>', unsafe_allow_html=True)
-            # We use an invisible Streamlit button over the CSS one to catch the click cleanly
             if st.button("Calculate Project Totals", key="calc_btn_hidden", type="primary", use_container_width=True):
                 with st.spinner("Processing calculations..."):
                     results_list = []
@@ -919,34 +930,46 @@ def main_application():
                 st.markdown("---")
                 st.markdown("### 3. Calculation Results")
                 
-                # Render Detailed Table
-                formatted_df = st.session_state.project_results_df.copy()
-                st.dataframe(formatted_df.style.format({
-                    "Volume": "{:,.2f}",
-                    "Total Mass (kg)": "{:,.2f}",
-                    "Total EE (GJ)": "{:,.2f}",
-                    "Total EC (kgCO2)": "{:,.2f}",
-                    "Total GWP100 (kgCO2e)": "{:,.2f}"
-                }), use_container_width=True, hide_index=True)
+                # Format dataframe for exact visual match with the screenshot
+                display_df = st.session_state.project_results_df.copy()
                 
-                # Render Metrics
-                t_cols = st.columns(4)
-                t_cols[0].metric("Total Mass", f"{st.session_state.project_totals['mass']:,.2f} kg")
-                t_cols[1].metric("Total EE", f"{st.session_state.project_totals['ee']:,.2f} GJ")
-                t_cols[2].metric("Total EC", f"{st.session_state.project_totals['ec']:,.2f} kgCO2")
-                t_cols[3].metric("Total GWP100", f"{st.session_state.project_totals['gwp']:,.2f} kgCO2e")
+                # Start index at 1 (instead of 0) to match the PySide6 table row numbers
+                display_df.index = display_df.index + 1 
+                
+                # Format numbers cleanly with commas and 2 decimal places for the table
+                display_df["Volume"] = display_df["Volume"].apply(lambda x: f"{float(x):,.2f}")
+                display_df["Total Mass (kg)"] = display_df["Total Mass (kg)"].apply(lambda x: f"{float(x):,.2f}")
+                display_df["Total EE (GJ)"] = display_df["Total EE (GJ)"].apply(lambda x: f"{float(x):,.2f}")
+                display_df["Total EC (kgCO2)"] = display_df["Total EC (kgCO2)"].apply(lambda x: f"{float(x):,.2f}")
+                display_df["Total GWP100 (kgCO2e)"] = display_df["Total GWP100 (kgCO2e)"].apply(lambda x: f"{float(x):,.2f}")
+                
+                # Render using st.table for the classic, static engineering report look
+                st.table(display_df)
+                
+                # Render Grand Totals in a styled HTML box matching the PySide6 UI exactly
+                totals_html = f"""
+                <div style="border: 1px solid #d3d3d3; border-radius: 5px; padding: 20px; background-color: #f9f9f9; margin-bottom: 20px;">
+                    <h4 style="margin-top: 0; color: #000; font-family: sans-serif;">Project Grand Totals</h4>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 16px; color: #000; font-family: sans-serif;">
+                        <tr><td style="font-weight: bold; width: 250px; padding: 8px 0;">Total Mass:</td><td>{st.session_state.project_totals['mass']:,.2f} kg</td></tr>
+                        <tr><td style="font-weight: bold; padding: 8px 0; background-color: #f0f0f0;">Total Embodied Energy:</td><td style="background-color: #f0f0f0;">{st.session_state.project_totals['ee']:,.2f} GJ</td></tr>
+                        <tr><td style="font-weight: bold; padding: 8px 0;">Total Embodied Carbon:</td><td>{st.session_state.project_totals['ec']:,.2f} kgCO2</td></tr>
+                        <tr><td style="font-weight: bold; padding: 8px 0; background-color: #f0f0f0;">Total GWP100:</td><td style="background-color: #f0f0f0;">{st.session_state.project_totals['gwp']:,.2f} kgCO2e</td></tr>
+                    </table>
+                </div>
+                """
+                st.markdown(totals_html, unsafe_allow_html=True)
                 
                 st.markdown("---")
                 st.markdown("### 4. Save Project to Cloud")
                 
                 s_col1, s_col2 = st.columns([3, 1])
                 with s_col1:
-                    st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name)
+                    st.info(f"Saving as: **{st.session_state.draft_proj_name}** (To rename, edit the Project Name at the top of the page)")
                 with s_col2:
-                    st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("Save to Account", type="primary", use_container_width=True):
                         if not st.session_state.draft_proj_name:
-                            st.error("Please enter a Project Name to save.")
+                            st.error("Please enter a Project Name at the top of the page to save.")
                         else:
                             projects_res = supabase.table("saved_projects").select("id, project_name").eq("user_id", st.session_state.user_id).execute()
                             local_user_projects = projects_res.data if projects_res.data else []
