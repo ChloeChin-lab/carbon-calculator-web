@@ -293,9 +293,12 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 if logic_type == "PERCENT_VOL" or logic_type == "UHPC_REF_VOL" or logic_type == "PERCENT_WEIGHT":
                     actual_ref_val = (ref_val * c_multiplier) if ref_per_unit else ref_val
                     
-                    if logic_type == "PERCENT_VOL" or logic_type == "UHPC_REF_VOL":
+                    if logic_type == "PERCENT_VOL":
                         vol_m3 = (qty / 100.0) * actual_ref_val
                         total_mass_kg = vol_m3 * mass_per_m3
+                    elif logic_type == "UHPC_REF_VOL":
+                        vol_L = qty * actual_ref_val
+                        total_mass_kg = (vol_L / 1000.0) * mass_per_m3
                     elif logic_type == "PERCENT_WEIGHT":
                         weight_tonnes = (qty / 100.0) * actual_ref_val
                         total_mass_kg = weight_tonnes * 1000.0
@@ -869,7 +872,7 @@ def main_application():
                             comps_to_remove.append(comp)
 
                 # Massive unrestricted master list for total freedom
-                units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "m", "m2", "units", "% by volume", "% by weight"]
+                units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "m", "m2", "units", "% by volume", "% by weight"]
                 
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp["base_name"]).strip().lower()
