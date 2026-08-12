@@ -38,7 +38,6 @@ if "draft_components" not in st.session_state:
     st.session_state.draft_components = []
 
 def clean_df(df):
-    """Safely removes invisible spaces from Excel headers and text cells."""
     if isinstance(df, pd.DataFrame) and not df.empty:
         df.columns = df.columns.str.strip()
         for col in df.select_dtypes(include=['object']).columns:
@@ -46,7 +45,6 @@ def clean_df(df):
     return df
 
 def safe_float(val, default=0.0):
-    """Safely handles text, N/A, dashes, or blanks in Excel cells without crashing."""
     if pd.isna(val):
         return default
     try:
@@ -97,10 +95,10 @@ def load_database():
     return None
 
 # ==========================================
-# 3. SECURE LOGIN UI & HELPERS
+# 3. SECURE LOGIN UI
 # ==========================================
 def login_page():
-    st.title("Structural Carbon Assessment System")
+    st.title("Sustainability Assessment System")
     st.markdown("Please authenticate to access the assessment modules.")
     
     email = st.text_input("Email", key="login_email")
@@ -184,7 +182,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Materials & Mixes</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The master library. View standard material properties, engineer custom mix designs, and compare carbon efficiencies.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The master library. View standard material properties, engineer custom mix designs, and compare carbon efficiencies side-by-side.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
@@ -208,7 +206,7 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 160px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The completed portfolio. Review, analyse, or delete previously saved structure assessments.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">Review, analyse, or delete previously completed structure assessments.</p>
         </div>
         <br>
         """, unsafe_allow_html=True)
@@ -236,7 +234,7 @@ def main_application():
         welcome_dashboard()
         return  
 
-    if st.sidebar.button("Return to Home"):
+    if st.sidebar.button("← Return to Home"):
         st.session_state.current_page = "Home"
         st.rerun()
 
@@ -712,7 +710,6 @@ def main_application():
 
         selected_structure = st.selectbox("Select Project Structure:", ["---"] + structure_options, index=struct_index)
 
-        # Show Generate button if the selected structure is new, or if the board is empty
         if selected_structure != "---":
             if selected_structure != st.session_state.draft_structure or len(st.session_state.draft_components) == 0:
                 if st.button("Generate Components", type="primary"):
@@ -720,14 +717,13 @@ def main_application():
                     st.session_state.draft_components = []
 
                     components_str = db["structures"].loc[db["structures"]["Structure_Name"] == selected_structure, "Components"].values[0]
-                    # Generate list, specifically filtering out the word "extra" if it exists in the excel string
                     component_list = [c.strip() for c in components_str.split(",") if c.strip().lower() != "extra"]
                     
                     for comp in component_list:
                         st.session_state.draft_components.append({
                             "id": str(uuid.uuid4()),
                             "base_name": comp,
-                            "display_name": comp,
+                            "custom_name": comp,
                             "count": 1,
                             "materials": [{
                                 "id": str(uuid.uuid4()),
@@ -746,31 +742,36 @@ def main_application():
             for comp in st.session_state.draft_components:
                 st.markdown("---")
                 
-                col_count, col_title, col_del_comp = st.columns([1.5, 3, 1])
+                col_title, col_count, col_del_comp = st.columns([3, 1.5, 1])
+
+                with col_title:
+                    comp["custom_name"] = st.text_input("Component Name:", value=comp["custom_name"], key=f"name_{comp['id']}")
 
                 with col_count:
                     comp["count"] = st.number_input("Quantity (Nos.)", min_value=1, step=1, value=int(comp.get("count", 1)), key=f"count_{comp['id']}")
-
-                with col_title:
-                    # Streamlit doesn't support 'comboboxes' (dropdowns with free typing). 
-                    # Providing a smart text input ensures the user can easily edit without blank spaces.
-                    comp["display_name"] = st.text_input("Component Name:", value=comp.get("display_name", comp["base_name"]), key=f"name_{comp['id']}")
 
                 with col_del_comp:
                     st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                         comps_to_remove.append(comp)
 
-                # Look up valid units using the hidden base_name
-                units = ["m3"]
+                universal_units = ["m3", "kg", "tonnes", "L", "% by vol.", "% of wt."]
+                units = []
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     unit_row = db["unit_logic"][db["unit_logic"]["Component_Name"] == comp["base_name"]]
                     if not unit_row.empty and "Unit_Options" in unit_row.columns:
-                        units = str(unit_row["Unit_Options"].values[0]).split(",")
+                        units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
+                
+                # Merge lists, keeping Excel suggested units at the top
+                for u in universal_units:
+                    if u not in units:
+                        units.append(u)
+                
+                if not units:
+                    units = universal_units
 
                 mats_to_remove = []
                 
-                # Material Data Entry (Mix -> Amount -> Unit)
                 for mat in comp["materials"]:
                     col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
                     
@@ -790,7 +791,7 @@ def main_application():
                     comp["materials"].remove(mat)
                     st.rerun()
 
-                col_add_mat, col_nav_mix = st.columns([2, 2])
+                col_add_mat, col_nav_mix, col_empty = st.columns([1, 1, 3])
                 with col_add_mat:
                     if st.button(f"+ Add Material", key=f"add_mat_btn_{comp['id']}"):
                         comp["materials"].append({
@@ -810,12 +811,11 @@ def main_application():
                 st.rerun()
 
             st.markdown("---")
-            
             if st.button("+ Add an 'Extra' Component"):
                 st.session_state.draft_components.append({
                     "id": str(uuid.uuid4()),
                     "base_name": "Extra",
-                    "display_name": "Extra Component",
+                    "custom_name": "Extra Component",
                     "count": 1,
                     "materials": [{
                         "id": str(uuid.uuid4()),
@@ -837,6 +837,7 @@ def main_application():
                         clean_project_data = []
 
                         for comp in st.session_state.draft_components:
+                            c_name = comp["custom_name"]
                             c_materials = []
                             c_multiplier = int(comp.get("count", 1))
 
@@ -858,7 +859,7 @@ def main_application():
                                 })
                                 
                             clean_project_data.append({
-                                "component_name": comp["display_name"],
+                                "component_name": c_name,
                                 "multiplier_count": c_multiplier,
                                 "materials": c_materials
                             })
