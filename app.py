@@ -136,6 +136,7 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
     """Helper function to calculate carbon and mass for any mix."""
     m_mass = 0
     m_gwp = 0
+    factor = 0
     
     if mix_name.startswith("Custom: "):
         mix_n = mix_name.replace("Custom: ", "")
@@ -154,6 +155,8 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                     gwp_factor = safe_float(adhoc.get("GWP100 (kgCO2e/kg)", 0))
                     m_mass += q
                     m_gwp += q * gwp_factor
+                    
+        factor = (m_gwp / m_mass) if m_mass > 0 else 0
     else:
         match_df = db["mixes"][db["mixes"]["Mix_Key"] == mix_name]
         if not match_df.empty:
@@ -163,12 +166,23 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                     val = safe_float(mix_row[comp_factor])
                     m_mass += val
                     m_gwp += val * safe_float(factors_df.loc[comp_factor].get('ECFGWP100_kgCO2e_kg', 0))
+            factor = (m_gwp / m_mass) if m_mass > 0 else 0
+        else:
+            # Check direct results for single materials (steel, timber, etc.)
+            direct_df = db["direct"][db["direct"]["Material_Key"] == mix_name]
+            if not direct_df.empty:
+                direct_row = direct_df.iloc[0]
+                m_mass = safe_float(direct_row.get("Total_Mass_kg_m3", 0))
+                m_gwp = safe_float(direct_row.get("GWP100_kgCO2e_m3", 0))
+                factor = safe_float(direct_row.get("ECFGWP100_kgCO2e_kg", 0))
+                if factor == 0 and m_mass > 0:
+                    factor = m_gwp / m_mass
                     
     return {
         "Mix": mix_name.replace("Custom: ", ""),
         "Mass (kg/m3)": m_mass,
         "Carbon (kgCO2e/m3)": m_gwp,
-        "Factor (kgCO2e/kg)": (m_gwp / m_mass) if m_mass > 0 else 0
+        "Factor (kgCO2e/kg)": factor
     }
 
 def welcome_dashboard():
@@ -236,8 +250,12 @@ def main_application():
     user_mixes = user_mixes_res.data if user_mixes_res.data else []
     custom_mix_names = [m["mix_name"] for m in user_mixes]
     
+    # Merge standard mixes and direct materials into one master list
     standard_mixes = db["mixes"]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
-    all_available_mixes = standard_mixes + [f"Custom: {name}" for name in custom_mix_names]
+    direct_mats = db["direct"]["Material_Key"].dropna().tolist() if not db["direct"].empty and "Material_Key" in db["direct"].columns else []
+    
+    all_standard = sorted(list(set(standard_mixes + direct_mats)))
+    all_available_mixes = all_standard + [f"Custom: {name}" for name in custom_mix_names]
     factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
     # ---------------------------------------------------------
