@@ -190,6 +190,59 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
         "Factor (kgCO2e/kg)": (m_gwp / m_mass) if m_mass > 0 else 0
     }
 
+def load_project_to_session(p_data, db):
+    """Callback to load a saved project into the Project Assessment tab."""
+    st.session_state.current_page = "Project Assessment"
+    st.session_state.draft_proj_name = f"{p_data['project_name']} (Copy)"
+    st.session_state.draft_structure = p_data['structure_type']
+    
+    struct_comps = []
+    if not db["structures"].empty and "Structure_Name" in db["structures"].columns:
+        match = db["structures"].loc[db["structures"]["Structure_Name"] == p_data['structure_type'], "Components"]
+        if not match.empty:
+            struct_comps = [c.strip() for c in str(match.values[0]).split(",")]
+            
+    new_draft = []
+    for c_data in p_data.get("component_data", []):
+        c_name = c_data.get("component_name", "Unknown")
+        
+        # Check if it was a standard template component or a custom 'Extra' component
+        if c_name in struct_comps:
+            base_name = c_name
+            custom_name = c_name
+        else:
+            base_name = "Extra"
+            custom_name = c_name
+            
+        mats = []
+        for m_data in c_data.get("materials", []):
+            mats.append({
+                "id": str(uuid.uuid4()),
+                "label": m_data.get("label", ""),
+                "qty": m_data.get("quantity", 0.0),
+                "unit": m_data.get("unit", "m3"),
+                "mix": m_data.get("assigned_mix", "--- Select ---")
+            })
+            
+        if not mats:
+            mats.append({
+                "id": str(uuid.uuid4()),
+                "label": "",
+                "qty": 0.0,
+                "unit": "m3",
+                "mix": "--- Select ---"
+            })
+        
+        new_draft.append({
+            "id": str(uuid.uuid4()),
+            "base_name": base_name,
+            "custom_name": custom_name,
+            "count": c_data.get("multiplier_count", 1),
+            "materials": mats
+        })
+        
+    st.session_state.draft_components = new_draft
+
 def welcome_dashboard():
     st.title("Sustainability Assessment System")
     st.markdown("Select a module below to begin your workflow.")
@@ -222,20 +275,20 @@ def welcome_dashboard():
             st.session_state.current_page = "Project Assessment"
             st.rerun()
         
-    with col3:
-        st.markdown("""
-        <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 160px;">
-            <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The completed portfolio. Review, analyse, or delete previously completed structure assessments.</p>
-        </div>
-        <br>
-        """, unsafe_allow_html=True)
-        if st.button("Access", key="btn_nav_saved", use_container_width=True):
-            st.session_state.current_page = "Saved Projects"
-            st.rerun()
-            
-    st.markdown("---")
-    st.info("**Workflow Note:** Custom mixes you create in the **Materials & Mixes** library will automatically become available for selection inside your **Project Assessments**.")
+        with col3:
+            st.markdown("""
+            <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 160px;">
+                <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
+                <p style="color: #5D6D7E; font-size: 14px;">The completed portfolio. Review, analyse, or delete previously completed structure assessments.</p>
+            </div>
+            <br>
+            """, unsafe_allow_html=True)
+            if st.button("Access", key="btn_nav_saved", use_container_width=True):
+                st.session_state.current_page = "Saved Projects"
+                st.rerun()
+                
+        st.markdown("---")
+        st.info("**Note:** Custom mixes you create in the **Materials & Mixes** library will automatically become available for selection inside your **Project Assessments**.")
 
 # ==========================================
 # 4. MAIN APPLICATION UI
@@ -816,7 +869,7 @@ def main_application():
                         })
                         st.rerun()
                 with col_nav_mix:
-                    if st.button("Create New Custom Mix"):
+                    if st.button("Create New Custom Mix", key=f"create_mix_btn_{comp['id']}"):
                         st.session_state.current_page = "Materials & Mixes"
                         st.rerun()
 
@@ -1018,22 +1071,22 @@ def main_application():
                     proj_id = p.get('id', str(p.get('project_name')))
                     del_key = f"del_proj_confirm_{proj_id}"
                     
-                    if not st.session_state.get(del_key, False):
-                        if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
-                            st.session_state[del_key] = True
-                            st.rerun()
-                    else:
-                        st.warning("Are you sure you want to permanently delete this project? This action cannot be undone.")
-                        y_col, n_col = st.columns(2)
-                        if y_col.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
-                            if 'id' in p:
-                                supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
-                                st.session_state[del_key] = False
-                                st.success("Project deleted.")
+                    btn_col_a, btn_col_b = st.columns(2)
+                    with btn_col_a:
+                        st.button(
+                            "Duplicate and Edit", 
+                            key=f"load_proj_{proj_id}", 
+                            on_click=load_project_to_session, 
+                            args=(p, db)
+                        )
+                            
+                    with btn_col_b:
+                        if not st.session_state.get(del_key, False):
+                            if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
+                                st.session_state[del_key] = True
                                 st.rerun()
-                            else:
-                                st.error("Missing 'id' column in Supabase.")
-                        if n_col.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
+                        else:
+                            st.warning("Are you sure you want to permanently delete this project? This action cannot be undone.")
                             st.session_state[del_key] = False
                             st.rerun()
         else:
