@@ -816,9 +816,9 @@ def main_application():
                         })
                         st.rerun()
                 with col_nav_mix:
-                if st.button("Create New Custom Mix"):
-                    st.session_state.current_page = "Materials & Mixes"
-                    st.rerun()
+                    if st.button("Create New Custom Mix"):
+                        st.session_state.current_page = "Materials & Mixes"
+                        st.rerun()
 
             st.markdown("---")
             
