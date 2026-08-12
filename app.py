@@ -18,19 +18,54 @@ st.set_page_config(page_title="Sustainability Assessment System", layout="wide")
 
 st.markdown("""
 <style>
-/* Target the Streamlit primary button specifically */
+/* Primary Button Default (Blue) */
 div[data-testid="stButton"] > button[kind="primary"] {
-    background-color: #4CAF50;
+    background-color: #3b82f6;
     color: white;
-    padding: 15px;
-    font-size: 18px;
+    padding: 10px 20px;
+    font-size: 16px;
     font-weight: bold;
-    border-radius: 8px;
+    border-radius: 6px;
     border: none;
 }
 div[data-testid="stButton"] > button[kind="primary"]:hover {
-    background-color: #45a049;
+    background-color: #2563eb;
 }
+
+/* Intelligent Button Coloring via CSS Sibling Selectors */
+/* Green Save Buttons */
+div.element-container:has(span.btn-green) + div.element-container button {
+    background-color: #10b981 !important;
+    color: white !important;
+    border: none !important;
+    font-weight: bold !important;
+}
+div.element-container:has(span.btn-green) + div.element-container button:hover {
+    background-color: #059669 !important;
+}
+
+/* Red Delete/Remove Buttons */
+div.element-container:has(span.btn-red) + div.element-container button {
+    background-color: #ef4444 !important;
+    color: white !important;
+    border: none !important;
+    font-weight: bold !important;
+}
+div.element-container:has(span.btn-red) + div.element-container button:hover {
+    background-color: #dc2626 !important;
+}
+
+/* Blue Action/Modify Buttons */
+div.element-container:has(span.btn-blue) + div.element-container button {
+    background-color: #3b82f6 !important;
+    color: white !important;
+    border: none !important;
+    font-weight: bold !important;
+}
+div.element-container:has(span.btn-blue) + div.element-container button:hover {
+    background-color: #2563eb !important;
+}
+
 /* Style static tables to look like the engineering report */
 .stTable {
     background-color: white;
@@ -90,8 +125,9 @@ def generate_pdf_report(df, best, worst, savings):
         pdf.cell(0, 8, "Executive Summary", ln=True)
         pdf.set_font("Arial", '', 11)
         summary = (f"This comparative analysis evaluates the Embodied Carbon Intensity (ECI) across selected materials. "
-                   f"The optimal material is {best['Material']} with a GWP100 of {best['Total GWP100 (kgCO2e/m³)']:.2f} kgCO2e/m³. "
-                   f"Specifying this over the highest-impact alternative ({worst['Material']}) yields a {savings:.1f}% reduction in embodied carbon.")
+                   f"Choosing the optimal material ({best['Material']}) instead of the highest-impact option ({worst['Material']}) "
+                   f"results in a {savings:.1f}% reduction in embodied carbon per cubic metre. "
+                   f"For large-scale infrastructure, this substitution is a highly effective decarbonisation strategy.")
         pdf.multi_cell(0, 6, summary)
         pdf.ln(10)
         
@@ -162,21 +198,35 @@ def load_database():
     return None
 
 def login_page():
-    st.title("Sustainability Assessment System")
-    st.markdown("Please authenticate to access the assessment modules.")
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    email = st.text_input("Email", key="login_email")
-    password = st.text_input("Password", type="password", key="login_password")
-    
-    if st.button("Log In"):
-        try:
-            response = supabase.auth.sign_in_with_password({"email": email, "password": password})
-            st.session_state.user_id = response.user.id
-            st.session_state.user_email = response.user.email
-            st.session_state.current_page = "Home"
-            st.rerun() 
-        except Exception:
-            st.error("Invalid email or password. Please contact your administrator for access.")
+    with col2:
+        st.markdown("""
+        <div style="text-align: center; padding: 20px;">
+            <h1 style="color: #f8fafc; font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
+            <p style="color: #94a3b8; font-size: 16px;">Enterprise platform for structural carbon accounting and sustainable material optimisation.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""<div style="background-color: #1e293b; padding: 40px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">""", unsafe_allow_html=True)
+        
+        email = st.text_input("Corporate Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+        if st.button("Secure Log In", use_container_width=True):
+            try:
+                response = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                st.session_state.user_id = response.user.id
+                st.session_state.user_email = response.user.email
+                st.session_state.current_page = "Home"
+                st.rerun() 
+            except Exception:
+                st.error("Invalid email or password. Please contact your administrator for access.")
+                
+        st.markdown("</div>", unsafe_allow_html=True)
 
 def load_project_to_session(p_data, db):
     """Loads a saved project safely into the Project Assessment tab."""
@@ -413,8 +463,16 @@ def render_results_table_and_totals(df, totals):
     st.markdown(totals_html, unsafe_allow_html=True)
 
 def welcome_dashboard():
-    st.title("Sustainability Assessment System")
-    st.markdown("<br>", unsafe_allow_html=True)
+    username = st.session_state.user_email.split('@')[0].capitalize()
+    st.markdown(f"""
+    <div style="padding: 40px; background: linear-gradient(135deg, #1e293b, #0f172a); border-radius: 12px; margin-bottom: 30px; color: white; border: 1px solid #334155;">
+        <h1 style="margin-top: 0; color: white;">Welcome back, {username}!</h1>
+        <p style="font-size: 18px; color: #cbd5e1; max-width: 800px;">
+            Manage your structural material libraries, assess project embodied carbon, and optimise engineering designs for maximum sustainability.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("""
@@ -422,7 +480,8 @@ def welcome_dashboard():
             <h3 style="color: #2C3E50; margin-top: 0;">Materials & Mixes</h3>
             <p style="color: #5D6D7E; font-size: 14px;">The master library. Configure ingredients, build custom mixes, and compare properties.</p>
         </div><br>""", unsafe_allow_html=True)
-        if st.button("Access", key="btn_nav_mats", use_container_width=True):
+        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+        if st.button("Access Library", key="btn_nav_mats", use_container_width=True):
             st.session_state.current_page = "Materials & Mixes"
             st.rerun()
         
@@ -432,7 +491,8 @@ def welcome_dashboard():
             <h3 style="color: #2C3E50; margin-top: 0;">Project Assessment</h3>
             <p style="color: #5D6D7E; font-size: 14px;">The structural assembly. Configure components, assign materials, and generate assessments.</p>
         </div><br>""", unsafe_allow_html=True)
-        if st.button("Access", key="btn_nav_proj", use_container_width=True):
+        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+        if st.button("Start Assessment", key="btn_nav_proj", use_container_width=True):
             st.session_state.current_page = "Project Assessment"
             st.rerun()
         
@@ -442,7 +502,8 @@ def welcome_dashboard():
             <h3 style="color: #2C3E50; margin-top: 0;">My Library</h3>
             <p style="color: #5D6D7E; font-size: 14px;">Your historical database. Review, analyse, and manage your saved projects and custom mixes.</p>
         </div><br>""", unsafe_allow_html=True)
-        if st.button("Access", key="btn_nav_saved", use_container_width=True):
+        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+        if st.button("View Records", key="btn_nav_saved", use_container_width=True):
             st.session_state.current_page = "My Library"
             st.rerun()
 
@@ -503,7 +564,9 @@ def main_application():
         mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Material / Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
-        direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
+        direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in direct_cats else set()
+        if not db["direct"].empty and "Category" in db["direct"].columns:
+            direct_cats = set(db["direct"]["Category"].dropna().unique())
         all_categories = sorted(list(mix_cats.union(direct_cats)))
         
         if mode == "View Standard Materials":
@@ -522,6 +585,7 @@ def main_application():
                     selected_mat = st.selectbox("Material Type/Grade:", ["--- Select Material ---"] + cat_all_mats, key="view_mat")
                 
                 if selected_mat != "--- Select Material ---":
+                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
                     if st.button("View Material Properties", type="primary"):
                         is_mix = selected_mat in cat_mix_mats
                         
@@ -640,8 +704,10 @@ def main_application():
                 st.markdown("---")
                 btn_col1, btn_col2 = st.columns(2)
                 with btn_col1:
-                    preview_mix = st.button("Preview Properties", type="primary")
+                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+                    preview_mix = st.button("Preview Properties")
                 with btn_col2:
+                    st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
                     save_mix = st.button("Save Custom Material")
                     
             else:
@@ -709,8 +775,10 @@ def main_application():
                 st.markdown("---")
                 btn_col1, btn_col2 = st.columns(2)
                 with btn_col1:
-                    preview_mix = st.button("Preview Mix Properties", type="primary")
+                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+                    preview_mix = st.button("Preview Mix Properties")
                 with btn_col2:
+                    st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
                     save_mix = st.button("Save Custom Mix")
                 
             if preview_mix and (len(custom_mix_data) > 0 or len(valid_adhoc) > 0):
@@ -841,71 +909,67 @@ def main_application():
                         Based on the dataset, <strong>{best['Material']}</strong> demonstrates optimal environmental performance, 
                         yielding a Global Warming Potential (GWP100) of <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong> at a density of <strong>{best['Total Mass (kg/m³)']:,.2f} kg/m³</strong>.
                         <br><br>
-                        In contrast, <strong>{worst['Material']}</strong> represents the highest carbon-impact option. 
-                        Specifying the optimal material over the highest-impact alternative yields a 
-                        <strong>{savings_pct:.1f}% reduction</strong> in embodied carbon per unit volume. For large-scale infrastructure applications, 
-                        this material substitution represents a highly effective decarbonisation strategy.
+                        Choosing the optimal material (<strong>{best['Material']}</strong>) instead of the highest-impact option (<strong>{worst['Material']}</strong>) results in a 
+                        <strong>{savings_pct:.1f}% reduction</strong> in embodied carbon per cubic metre. For large-scale infrastructure, this substitution is a highly effective decarbonisation strategy.
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
             
-                st.markdown("##### Visual Analytics")
-                tab_bar, tab_scatter = st.tabs(["Carbon Leaderboard", "Density vs. Carbon Trade-off"])
+                    st.markdown("##### Visual Analytics")
+                    tab_bar, tab_scatter = st.tabs(["Carbon Leaderboard", "Density vs. Carbon Trade-off"])
+                    
+                    with tab_bar:
+                        best_val = float(best['Total GWP100 (kgCO2e/m³)'])
+                        
+                        base_chart = alt.Chart(comp_df).encode(
+                            x=alt.X("Total GWP100 (kgCO2e/m³):Q", title="Global Warming Potential (kgCO2e/m³)", scale=alt.Scale(domain=[0, comp_df["Total GWP100 (kgCO2e/m³)"].max() * 1.15])),
+                            y=alt.Y("Material:N", sort="-x", title="")
+                        )
+                        
+                        bars = base_chart.mark_bar(cornerRadiusEnd=4, height=40).encode(
+                            color=alt.condition(
+                                alt.datum['Total GWP100 (kgCO2e/m³)'] == best_val,
+                                alt.value('#27ae60'),  
+                                alt.value('#95a5a6')   
+                            ),
+                            tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
+                        )
+                        
+                        text = base_chart.mark_text(
+                            align='left',
+                            baseline='middle',
+                            dx=5,
+                            fontWeight='bold'
+                        ).encode(
+                            text=alt.Text('Total GWP100 (kgCO2e/m³):Q', format=',.2f')
+                        )
+                        
+                        final_bar_chart = (bars + text).properties(height=alt.Step(60))
+                        st.altair_chart(final_bar_chart, use_container_width=True)
+                        
+                    with tab_scatter:
+                        scatter = alt.Chart(comp_df).mark_circle(size=200).encode(
+                            x=alt.X("Total Mass (kg/m³):Q", title="Density / Mass (kg/m³)", scale=alt.Scale(zero=False, padding=20)),
+                            y=alt.Y("Total GWP100 (kgCO2e/m³):Q", title="Total GWP100 (kgCO2e/m³)", scale=alt.Scale(zero=False, padding=20)),
+                            color=alt.Color("Material:N", legend=alt.Legend(title="Material")),
+                            tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
+                        ).properties(height=350)
+                        st.altair_chart(scatter, use_container_width=True)
                 
-                with tab_bar:
-                    # FIX: Force best_val into a Python float to prevent Altair Dataset errors
-                    best_val = float(best['Total GWP100 (kgCO2e/m³)'])
+                    st.markdown("##### Detailed Metric Breakdown & Data Export")
                     
-                    base_chart = alt.Chart(comp_df).encode(
-                        x=alt.X("Total GWP100 (kgCO2e/m³):Q", title="Global Warming Potential (kgCO2e/m³)", scale=alt.Scale(domain=[0, comp_df["Total GWP100 (kgCO2e/m³)"].max() * 1.15])),
-                        y=alt.Y("Material:N", sort="-x", title="")
-                    )
+                    def highlight_best(s):
+                        is_min = s == s.min()
+                        return ['background-color: #d4edda; color: #155724; font-weight: bold' if v else '' for v in is_min]
+                        
+                    display_df = comp_df.set_index("Material")
+                    styled_df = display_df.style.apply(highlight_best).format({
+                        "Total Mass (kg/m³)": "{:,.2f}",
+                        "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
+                        "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
+                    })
+                    st.table(styled_df)
                     
-                    bars = base_chart.mark_bar(cornerRadiusEnd=4, height=40).encode(
-                        color=alt.condition(
-                            alt.datum['Total GWP100 (kgCO2e/m³)'] == best_val,
-                            alt.value('#27ae60'),  
-                            alt.value('#95a5a6')   
-                        ),
-                        tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
-                    )
-                    
-                    text = base_chart.mark_text(
-                        align='left',
-                        baseline='middle',
-                        dx=5,
-                        fontWeight='bold'
-                    ).encode(
-                        text=alt.Text('Total GWP100 (kgCO2e/m³):Q', format=',.2f')
-                    )
-                    
-                    final_bar_chart = (bars + text).properties(height=alt.Step(60))
-                    st.altair_chart(final_bar_chart, use_container_width=True)
-                    
-                with tab_scatter:
-                    scatter = alt.Chart(comp_df).mark_circle(size=200).encode(
-                        x=alt.X("Total Mass (kg/m³):Q", title="Density / Mass (kg/m³)", scale=alt.Scale(zero=False, padding=20)),
-                        y=alt.Y("Total GWP100 (kgCO2e/m³):Q", title="Total GWP100 (kgCO2e/m³)", scale=alt.Scale(zero=False, padding=20)),
-                        color=alt.Color("Material:N", legend=alt.Legend(title="Material")),
-                        tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
-                    ).properties(height=350)
-                    st.altair_chart(scatter, use_container_width=True)
-            
-                st.markdown("##### Detailed Metric Breakdown & Data Export")
-                
-                def highlight_best(s):
-                    is_min = s == s.min()
-                    return ['background-color: #d4edda; color: #155724; font-weight: bold' if v else '' for v in is_min]
-                    
-                display_df = comp_df.set_index("Material")
-                styled_df = display_df.style.apply(highlight_best).format({
-                    "Total Mass (kg/m³)": "{:,.2f}",
-                    "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
-                    "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
-                })
-                st.table(styled_df)
-                
-                if len(comp_data) > 1:
                     st.markdown("<br>", unsafe_allow_html=True)
                     col_csv, col_pdf, _ = st.columns([1, 1, 1.5])
                     
@@ -928,6 +992,13 @@ def main_application():
                                 mime="application/pdf",
                                 use_container_width=True
                             )
+                else:
+                    st.info("💡 Please select at least one more material from the dropdown above to generate the side-by-side comparison report and visual charts.")
+                    st.dataframe(comp_df.set_index("Material").style.format({
+                        "Total Mass (kg/m³)": "{:,.2f}",
+                        "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
+                        "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
+                    }), use_container_width=True)
 
     # ---------------------------------------------------------
     # TAB 2: PROJECT ASSESSMENT
@@ -949,16 +1020,19 @@ def main_application():
             else:
                 st.warning("Are you sure? All progress will be lost.")
                 col_y, col_n = st.columns(2)
-                if col_y.button("Yes, Clear"):
-                    st.session_state.draft_proj_name = ""
-                    st.session_state.draft_structure = "---"
-                    st.session_state.draft_components = []
-                    st.session_state.project_results_df = None
-                    st.session_state.confirm_clear_all = False
-                    st.rerun()
-                if col_n.button("Cancel"):
-                    st.session_state.confirm_clear_all = False
-                    st.rerun()
+                with col_y:
+                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                    if st.button("Yes, Clear"):
+                        st.session_state.draft_proj_name = ""
+                        st.session_state.draft_structure = "---"
+                        st.session_state.draft_components = []
+                        st.session_state.project_results_df = None
+                        st.session_state.confirm_clear_all = False
+                        st.rerun()
+                with col_n:
+                    if st.button("Cancel"):
+                        st.session_state.confirm_clear_all = False
+                        st.rerun()
         
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
         
@@ -973,7 +1047,8 @@ def main_application():
         
         with col_gen:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Generate Components", type="primary", use_container_width=True):
+            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+            if st.button("Generate Components", use_container_width=True):
                 if selected_structure != "---":
                     st.session_state.draft_structure = selected_structure
                     st.session_state.draft_components = []
@@ -1032,6 +1107,7 @@ def main_application():
                 with col_del_comp:
                     st.markdown("<br>", unsafe_allow_html=True)
                     if is_extra:
+                        st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
@@ -1087,6 +1163,7 @@ def main_application():
                     with col_del:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if len(comp["materials"]) > 1: 
+                            st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
                             if st.button("Delete", key=f"del_mat_{mat['id']}"):
                                 mats_to_remove.append(mat)
 
@@ -1108,7 +1185,8 @@ def main_application():
                         })
                         st.rerun()
                 with col_nav_mix:
-                    if st.button("Create New Custom Mix ➔", key=f"nav_btn_{comp['id']}"):
+                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+                    if st.button("Create Custom Mix ➔", key=f"nav_btn_{comp['id']}"):
                         st.session_state.current_page = "Materials & Mixes"
                         st.rerun()
 
@@ -1137,7 +1215,8 @@ def main_application():
 
             st.markdown("---")
             
-            if st.button("Calculate Project Totals", type="primary", use_container_width=True):
+            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+            if st.button("Calculate Project Totals", use_container_width=True):
                 with st.spinner("Processing calculations..."):
                     df, totals, clean_data = calculate_project_data(st.session_state.draft_components, db, user_mixes, factors_df)
                     
@@ -1154,6 +1233,7 @@ def main_application():
                 
                 render_results_table_and_totals(st.session_state.project_results_df, st.session_state.project_totals)
                 
+                st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
                 if st.button("Save Project"):
                     if not st.session_state.draft_proj_name:
                         st.error("Please enter a Project Name at the top of the page to save.")
@@ -1174,13 +1254,16 @@ def main_application():
                 if st.session_state.get("confirm_overwrite_name"):
                     st.warning(f"A project named '{st.session_state.confirm_overwrite_name}' already exists. Do you want to overwrite it?")
                     col_y, col_n = st.columns(2)
-                    if col_y.button("Yes, Overwrite"):
-                        st.session_state.execute_save = True
-                        st.session_state.confirm_overwrite_name = None
-                        st.rerun()
-                    if col_n.button("No, Rename"):
-                        st.session_state.confirm_overwrite_name = None
-                        st.rerun()
+                    with col_y:
+                        st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
+                        if st.button("Yes, Overwrite"):
+                            st.session_state.execute_save = True
+                            st.session_state.confirm_overwrite_name = None
+                            st.rerun()
+                    with col_n:
+                        if st.button("No, Rename"):
+                            st.session_state.confirm_overwrite_name = None
+                            st.rerun()
                 
                 if st.session_state.get("execute_save"):
                     project_payload = {
@@ -1298,6 +1381,7 @@ def main_application():
                         
                         with btn_col_rn:
                             new_p_name = st.text_input("Rename Project:", value=p['project_name'], key=f"rn_p_{proj_id}")
+                            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
                             if st.button("Update Name", key=f"btn_rn_{proj_id}"):
                                 try:
                                     supabase.table("saved_projects").update({"project_name": new_p_name}).eq("id", proj_id).execute()
@@ -1309,29 +1393,34 @@ def main_application():
                         
                         with btn_col_a:
                             st.markdown("<br>", unsafe_allow_html=True)
+                            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
                             st.button("Edit Project In Builder", key=f"load_proj_{proj_id}", on_click=load_project_to_session, args=(p, db))
                                 
                         with btn_col_b:
                             st.markdown("<br>", unsafe_allow_html=True)
                             if not st.session_state.get(del_key, False):
+                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
                                 if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
                                     st.session_state[del_key] = True
                                     st.rerun()
                             else:
                                 st.warning("Are you sure? This cannot be undone.")
                                 y_col, n_col = st.columns(2)
-                                if y_col.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
-                                    if 'id' in p:
-                                        supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
+                                with y_col:
+                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                    if st.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
+                                        if 'id' in p:
+                                            supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
+                                            st.session_state[del_key] = False
+                                            st.success("Project deleted.")
+                                            time.sleep(1)
+                                            st.rerun()
+                                        else:
+                                            st.error("Missing 'id' column.")
+                                with n_col:
+                                    if st.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
                                         st.session_state[del_key] = False
-                                        st.success("Project deleted.")
-                                        time.sleep(1)
                                         st.rerun()
-                                    else:
-                                        st.error("Missing 'id' column.")
-                                if n_col.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
-                                    st.session_state[del_key] = False
-                                    st.rerun()
             else:
                 st.info("No projects saved under your account yet.")
 
@@ -1423,6 +1512,7 @@ def main_application():
                         col_rn, col_dup, col_del = st.columns([1.5, 1, 1])
                         with col_rn:
                             new_m_name = st.text_input("Rename Mix:", value=m['mix_name'], key=f"rn_in_{m['id']}")
+                            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
                             if st.button("Update Name", key=f"rn_btn_{m['id']}"):
                                 try:
                                     supabase.table("user_mixes").update({"mix_name": new_m_name}).eq("id", m['id']).execute()
@@ -1434,10 +1524,12 @@ def main_application():
                         
                         with col_dup:
                             st.markdown("<br>", unsafe_allow_html=True)
+                            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
                             if st.button("Duplicate Mix", key=f"dup_m_{m['id']}"):
+                                new_copy_name = f"{m['mix_name']} (Copy)"
                                 mix_payload = {
                                     "user_id": st.session_state.user_id,
-                                    "mix_name": f"{m['mix_name']} (Copy)",
+                                    "mix_name": new_copy_name,
                                     "category": m['category'],
                                     "components": m.get("components", {}),
                                     "adhoc_materials": m.get("adhoc_materials", [])
@@ -1445,13 +1537,15 @@ def main_application():
                                 try:
                                     supabase.table("user_mixes").insert(mix_payload).execute()
                                     st.success("Mix successfully duplicated!")
+                                    st.session_state.lib_selected_mix = new_copy_name
                                     time.sleep(1)
                                     st.rerun()
                                 except Exception as e:
-                                    st.error("Database Save Error.")
+                                    st.error(f"Database Save Error: {e}")
 
                         with col_del:
                             st.markdown("<br>", unsafe_allow_html=True)
+                            st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
                             if st.button("Delete Mix", key=f"del_m_{m['id']}"):
                                 supabase.table("user_mixes").delete().eq("id", m['id']).execute()
                                 st.success("Mix deleted.")
