@@ -766,71 +766,71 @@ def main_application():
                     with col2:
                         mat["qty"] = st.number_input("Amount", min_value=0.0, step=0.1, value=float(mat["qty"]), key=f"qty_{mat['id']}")
                     with col3:
-                        mat["unit"] = st.selectbox("Unit", units, index=units.index(mat["unit"]) if mat["unit"] in units else 0, key=f"unit_{mat['id']}")
-                    with col4:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if len(comp["materials"]) > 1: 
-                            if st.button("Delete", key=f"del_mat_{mat['id']}"):
-                                mats_to_remove.append(mat)
-
-                for mat in mats_to_remove:
-                    comp["materials"].remove(mat)
-                    st.rerun()
-
-                col_add_mat, col_nav_mix, col_empty = st.columns([2, 2, 4])
-                with col_add_mat:
-                    if st.button(f"+ Add Material", key=f"add_mat_btn_{comp['id']}"):
-                        comp["materials"].append({
-                            "id": str(uuid.uuid4()),
-                            "qty": 0.0,
-                            "unit": units[0],
-                            "mix": "--- Select ---"
-                        })
-                        st.rerun()
-                with col_nav_mix:
-                    if st.button("Create New Mix ➔", key=f"nav_mix_btn_{comp['id']}"):
-                        st.session_state.current_page = "Materials & Mixes"
-                        st.rerun()
-
-            for comp in comps_to_remove:
-                st.session_state.draft_components.remove(comp)
+            st.markdown("""
+            <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 160px;">
+                <h3 style="color: #2C3E50; margin-top: 0;">Saved Projects</h3>
+                <p style="color: #5D6D7E; font-size: 14px;">Review, analyse, or delete previously completed structure assessments.</p>
+            </div>
+            <br>
+            """, unsafe_allow_html=True)
+            if st.button("Access Saved Projects", use_container_width=True):
+                st.session_state.current_page = "Saved Projects"
                 st.rerun()
 
-            st.markdown("---")
-            if st.button("+ Add an 'Extra' Component"):
-                st.session_state.draft_components.append({
-                    "id": str(uuid.uuid4()),
-                    "base_name": "Extra",
-                    "custom_name": "",
-                    "count": 1,
-                    "materials": [{
-                        "id": str(uuid.uuid4()),
-                        "qty": 0.0,
-                        "unit": "m3",
-                        "mix": "--- Select ---"
-                    }]
-                })
-                st.rerun()
+# ==========================================
+# 4. MAIN APPLICATION UI
+# ==========================================
+def main_application():
+    db = load_database()
+    
+    if db is None:
+        st.error("Cannot start the application. Please check the database connection.")
+        st.stop()
 
-            st.markdown("---")
+    # --- 1. HOME DASHBOARD ROUTING ---
+    # If on the Home page, show the Welcome boxes and hide the sidebar navigation
+    if st.session_state.current_page == "Home":
+        st.sidebar.caption(f"User: {st.session_state.user_email}")
+        if st.sidebar.button("Log Out"):
+            st.session_state.user_id = None
+            st.session_state.current_page = "Home"
+            st.rerun()
             
-            if st.button("Calculate & Save Project", type="primary"):
-                if not st.session_state.draft_proj_name:
-                    st.error("Please enter a Project Name to save.")
-                else:
-                    with st.spinner("Processing calculations securely..."):
-                        total_carbon = 0
-                        clean_project_data = []
+        welcome_dashboard()
+        return  # Stop execution here so it doesn't run the module code below
 
-                        for comp in st.session_state.draft_components:
-                            c_name = comp["custom_name"] if ("Extra" in comp["base_name"] and comp["custom_name"]) else comp["base_name"]
-                            c_materials = []
-                            c_multiplier = int(comp.get("count", 1))
+    # --- 2. MODULE ROUTING ---
+    # Everything below only runs when you are actively inside one of the 3 calculators
+    if st.sidebar.button("← Return to Home"):
+        st.session_state.current_page = "Home"
+        st.rerun()
 
-                            for mat in comp["materials"]:
-                                qty = mat["qty"]
-                                mix = mat["mix"]
-                                comp_carbon_rate = 0 
+    st.sidebar.markdown("---")
+    
+    # Safely find the index to prevent ValueError crashes
+    nav_options = ["Materials & Mixes", "Project Assessment", "Saved Projects"]
+    try:
+        nav_idx = nav_options.index(st.session_state.current_page)
+    except ValueError:
+        nav_idx = 0
+        
+    st.sidebar.radio("Navigation", nav_options, 
+                     key="nav_radio", 
+                     index=nav_idx,
+                     on_change=lambda: st.session_state.update(current_page=st.session_state.nav_radio),
+                     label_visibility="collapsed")
+    
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"User: {st.session_state.user_email}")
+        
+    if st.sidebar.button("Log Out ", key="logout_module"): # Added space to key to prevent duplicates
+        st.session_state.user_id = None
+        st.session_state.current_page = "Home"
+        st.rerun()
+
+    st.title(st.session_state.current_page)
+        
+    user_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
                                 
                                 if mix != "--- Select ---":
                                     props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
