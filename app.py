@@ -847,45 +847,45 @@ def main_application():
                     ).properties(height=350)
                     st.altair_chart(scatter, use_container_width=True)
             
-            st.markdown("##### Detailed Metric Breakdown & Data Export")
-            
-            def highlight_best(s):
-                is_min = s == s.min()
-                return ['background-color: #d4edda; color: #155724; font-weight: bold' if v else '' for v in is_min]
+                st.markdown("##### Detailed Metric Breakdown & Data Export")
                 
-            display_df = comp_df.set_index("Material")
-            styled_df = display_df.style.apply(highlight_best).format({
-                "Total Mass (kg/m³)": "{:,.2f}",
-                "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
-                "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
-            })
-            st.table(styled_df)
-            
-            if len(comp_data) > 1:
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_csv, col_pdf, _ = st.columns([1, 1, 1.5])
+                def highlight_best(s):
+                    is_min = s == s.min()
+                    return ['background-color: #d4edda; color: #155724; font-weight: bold' if v else '' for v in is_min]
+                    
+                display_df = comp_df.set_index("Material")
+                styled_df = display_df.style.apply(highlight_best).format({
+                    "Total Mass (kg/m³)": "{:,.2f}",
+                    "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
+                    "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
+                })
+                st.table(styled_df)
                 
-                csv_data = comp_df.to_csv(index=False).encode('utf-8')
-                col_csv.download_button(
-                    label="📄 Download Data (CSV)",
-                    data=csv_data,
-                    file_name="material_comparison.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-                
-                if HAS_FPDF:
-                    pdf_bytes = generate_pdf_report(comp_df, best, worst, savings_pct)
-                    if pdf_bytes:
-                        col_pdf.download_button(
-                            label="📊 Download PDF Report",
-                            data=pdf_bytes,
-                            file_name="sustainability_report.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
-                        )
-                else:
-                    col_pdf.info("ℹ️ To enable PDF export, run `pip install fpdf` on your server.")
+                if len(comp_data) > 1:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    col_csv, col_pdf, _ = st.columns([1, 1, 1.5])
+                    
+                    csv_data = comp_df.to_csv(index=False).encode('utf-8')
+                    col_csv.download_button(
+                        label="📄 Download Data (CSV)",
+                        data=csv_data,
+                        file_name="material_comparison.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    
+                    if 'generate_pdf_report' in globals():
+                        pdf_bytes = generate_pdf_report(comp_df, best, worst, savings_pct)
+                        if pdf_bytes:
+                            col_pdf.download_button(
+                                label="📊 Download PDF Report",
+                                data=pdf_bytes,
+                                file_name="sustainability_report.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                    else:
+                        col_pdf.info("ℹ️ To enable PDF export, run `pip install fpdf` on your server and add the PDF logic.")
 
     # ---------------------------------------------------------
     # TAB 2: PROJECT ASSESSMENT
