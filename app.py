@@ -135,7 +135,7 @@ def load_database():
     return None
 
 # ==========================================
-# 3. SECURE LOGIN UI & HELPERS
+# 3. CORE LOGIC & HELPERS
 # ==========================================
 def login_page():
     st.title("Sustainability Assessment System")
@@ -154,35 +154,17 @@ def login_page():
         except Exception:
             st.error("Invalid email or password. Please contact your administrator for access.")
 
-def load_mix_to_session(mix_data, factors_dataframe):
-    st.session_state["mix_mode_radio"] = "Create Custom Mix"
-    st.session_state["cust_cat"] = mix_data["category"]
-    st.session_state["mix_name_input"] = f"{mix_data['mix_name']} (Copy)"
-    
-    if not factors_dataframe.empty and "Component" in factors_dataframe.columns:
-        for c in factors_dataframe["Component"].tolist():
-            st.session_state[f"cust_comp_{c}"] = safe_float(mix_data.get("components", {}).get(c, 0.0))
-            
-    if mix_data.get("adhoc_materials"):
-        st.session_state["adhoc_mats"] = pd.DataFrame(mix_data["adhoc_materials"])
-
-def load_project_to_session(p_data, db):
-    """Callback to load a saved project into the Project Assessment tab safely."""
-    st.session_state.current_page = "Project Assessment"
-    st.session_state.draft_proj_name = f"{p_data['project_name']} (Copy)"
-    st.session_state.draft_structure = p_data['structure_type']
-    st.session_state.project_results_df = None # Clear old results so they must recalculate
-    
+def reconstruct_draft_components(p_data, db):
+    """Rebuilds the standard UI component array from saved JSON data."""
     known_components = []
     if db is not None and not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
         known_components = db["unit_logic"]["Component_Name"].dropna().astype(str).str.strip().tolist()
         
     new_draft = []
-    
-    # 1. Properly Handle Legacy Dict Format AND New List Format
     raw_comp_data = p_data.get("component_data", [])
+    
+    # Convert legacy dict format to modern list format
     if isinstance(raw_comp_data, dict):
-        # Convert legacy dictionary format into the modern list structure
         converted_list = []
         for c_name, c_details in raw_comp_data.items():
             converted_list.append({
@@ -197,14 +179,13 @@ def load_project_to_session(p_data, db):
             })
         raw_comp_data = converted_list
         
-    # 2. Rebuild the UI Data 
     for c_data in raw_comp_data:
         c_name = c_data.get("component_name", "Unknown")
         b_name = c_data.get("base_name") 
         
-        # Legacy Support: If base_name wasn't saved in older projects, guess it from the custom name
+        # Legacy support if base_name is missing
         if not b_name:
-            b_name = "Extra"  # Failsafe
+            b_name = "Extra"
             for kc in known_components:
                 if kc.lower() in c_name.lower():
                     b_name = kc
@@ -228,7 +209,15 @@ def load_project_to_session(p_data, db):
             "materials": mats
         })
         
-    st.session_state.draft_components = new_draft
+    return new_draft
+
+def load_project_to_session(p_data, db):
+    """Callback to load a saved project into the active Project Assessment tab."""
+    st.session_state.current_page = "Project Assessment"
+    st.session_state.draft_proj_name = f"{p_data['project_name']} (Copy)"
+    st.session_state.draft_structure = p_data['structure_type']
+    st.session_state.project_results_df = None 
+    st.session_state.draft_components = reconstruct_draft_components(p_data, db)
 
 def get_unit_logic_type(unit_string):
     if "/ unit" in unit_string: return "PER_UNIT"
@@ -239,7 +228,7 @@ def get_unit_logic_type(unit_string):
     return "BASIC"
 
 def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
-    """Upgraded calculation engine fetching Mass, EE, EC, and GWP100 metrics."""
+    """Calculates live Mass, EE, EC, and GWP100 properties for any material mix."""
     m_mass, m_gwp, m_ee, m_ec = 0.0, 0.0, 0.0, 0.0
     
     if mix_name.startswith("Custom: "):
@@ -297,6 +286,155 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
         "Factor_EE (MJ/kg)": (m_ee / m_mass) if m_mass > 0 else 0,
         "Factor_EC (kgCO2/kg)": (m_ec / m_mass) if m_mass > 0 else 0
     }
+
+def calculate_project_data(draft_components, db, user_mixes, factors_df):
+    """Central engine that calculates all project items and returns DataFrames for the UI table."""
+    results_list = []
+    grand_totals = {"mass": 0.0, "ee": 0.0, "ec": 0.0, "gwp": 0.0}
+    clean_project_data = []
+
+    # PRE-SCAN: Anchor references specifically to their component
+    concrete_volumes_cache = {}
+    steel_weights_cache = {}
+    total_project_uhpc_volume_m3 = 0.0
+    
+    for comp in draft_components:
+        c_multiplier = int(comp.get("count", 1))
+        conc_vol_m3 = 0.0
+        steel_weight_tonnes = 0.0
+        
+        for mat in comp["materials"]:
+            qty = safe_float(mat.get("qty", 0))
+            unit_str = mat.get("unit", "")
+            mix_name = mat.get("mix", "--- Select ---")
+            logic_type = get_unit_logic_type(unit_str)
+            
+            total_vol = 0.0
+            if logic_type == "PER_UNIT":
+                total_vol = qty * c_multiplier
+            elif logic_type in ["BASIC", "BASIC_LITER"]:
+                total_vol = qty
+                
+            if "m3" in unit_str and logic_type in ["BASIC", "PER_UNIT"]:
+                conc_vol_m3 += total_vol
+                if mix_name != "--- Select ---" and "UHPC" in mix_name.upper():
+                    total_project_uhpc_volume_m3 += total_vol
+            
+            if "tonnes" in unit_str and logic_type in ["BASIC", "PER_UNIT"]:
+                steel_weight_tonnes += total_vol
+                
+        # Caching the concrete and steel volume STRICTLY for this specific component
+        concrete_volumes_cache[comp["id"]] = conc_vol_m3
+        steel_weights_cache[comp["id"]] = steel_weight_tonnes
+
+    # MAIN CALCULATION PASS
+    for comp_idx, comp in enumerate(draft_components):
+        c_name = comp.get("custom_name", "") if comp.get("custom_name", "") else comp.get("base_name", "Extra")
+        c_multiplier = int(comp.get("count", 1))
+        c_materials = []
+
+        # Reference strictly the local volume within THIS component
+        ref_conc_vol = concrete_volumes_cache.get(comp["id"], 0.0)
+        ref_steel_weight = steel_weights_cache.get(comp["id"], 0.0)
+
+        for mat in comp["materials"]:
+            qty = safe_float(mat.get("qty", 0))
+            unit_str = mat.get("unit", "")
+            mix = mat.get("mix", "--- Select ---")
+            logic_type = get_unit_logic_type(unit_str)
+            
+            if mix != "--- Select ---" and qty > 0:
+                props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
+                mass_per_m3 = props["Mass (kg/m3)"]
+                total_mass_kg = 0.0
+                
+                if logic_type == "PERCENT_VOL":
+                    # Percentage of the local concrete volume in this component
+                    vol_m3 = (qty / 100.0) * ref_conc_vol
+                    total_mass_kg = vol_m3 * mass_per_m3
+                elif logic_type == "UHPC_REF_VOL":
+                    vol_L = qty * total_project_uhpc_volume_m3
+                    total_mass_kg = (vol_L / 1000.0) * mass_per_m3
+                elif logic_type == "PERCENT_WEIGHT":
+                    # Percentage of the local steel weight in this component
+                    weight_tonnes = (qty / 100.0) * ref_steel_weight
+                    total_mass_kg = weight_tonnes * 1000.0
+                elif logic_type in ["PER_UNIT", "BASIC", "BASIC_LITER"]:
+                    base_vol = qty * c_multiplier if logic_type == "PER_UNIT" else qty
+                    if "tonnes" in unit_str:
+                        total_mass_kg = base_vol * 1000.0
+                    elif "kg" in unit_str:
+                        total_mass_kg = base_vol
+                    elif logic_type == "BASIC_LITER":
+                        total_mass_kg = (base_vol / 1000.0) * mass_per_m3
+                    else: # m3 or other
+                        total_mass_kg = base_vol * mass_per_m3
+
+                # Final Totals
+                item_ee_gj = (total_mass_kg * props["Factor_EE (MJ/kg)"]) / 1000.0
+                item_ec_kg = total_mass_kg * props["Factor_EC (kgCO2/kg)"]
+                item_gwp = total_mass_kg * props["Factor_GWP (kgCO2e/kg)"]
+                
+                grand_totals["mass"] += total_mass_kg
+                grand_totals["ee"] += item_ee_gj
+                grand_totals["ec"] += item_ec_kg
+                grand_totals["gwp"] += item_gwp
+                
+                item_label = f"{comp_idx + 1}. {c_name} {mat.get('label', '')}".strip()
+                
+                results_list.append({
+                    "Item": item_label,
+                    "Material": mix,
+                    "Volume": qty, # Keeping the exact number they typed (e.g. 2.10)
+                    "Unit": unit_str,
+                    "Total Mass (kg)": total_mass_kg,
+                    "Total EE (GJ)": item_ee_gj,
+                    "Total EC (kgCO2)": item_ec_kg,
+                    "Total GWP100 (kgCO2e)": item_gwp
+                })
+                
+            c_materials.append({
+                "label": mat.get("label", ""),
+                "quantity": qty,
+                "unit": unit_str,
+                "assigned_mix": mix
+            })
+                
+        clean_project_data.append({
+            "base_name": comp.get("base_name", "Extra"),
+            "component_name": c_name,
+            "multiplier_count": c_multiplier,
+            "materials": c_materials
+        })
+        
+    results_df = pd.DataFrame(results_list) if len(results_list) > 0 else None
+    return results_df, grand_totals, clean_project_data
+
+def render_results_table_and_totals(df, totals):
+    """Renders the standard engineering table and totals box identically across all tabs."""
+    display_df = df.copy()
+    display_df.index = display_df.index + 1 
+    
+    display_df["Volume"] = display_df["Volume"].apply(lambda x: f"{float(x):,.2f}")
+    display_df["Total Mass (kg)"] = display_df["Total Mass (kg)"].apply(lambda x: f"{float(x):,.2f}")
+    display_df["Total EE (GJ)"] = display_df["Total EE (GJ)"].apply(lambda x: f"{float(x):,.2f}")
+    display_df["Total EC (kgCO2)"] = display_df["Total EC (kgCO2)"].apply(lambda x: f"{float(x):,.2f}")
+    display_df["Total GWP100 (kgCO2e)"] = display_df["Total GWP100 (kgCO2e)"].apply(lambda x: f"{float(x):,.2f}")
+    
+    st.table(display_df)
+    
+    totals_html = f"""
+    <div style="border: 1px solid #d3d3d3; border-radius: 5px; padding: 20px; background-color: #f9f9f9; margin-bottom: 20px;">
+        <h4 style="margin-top: 0; color: #000; font-family: sans-serif;">Project Grand Totals</h4>
+        <table style="width: 100%; border-collapse: collapse; font-size: 16px; color: #000; font-family: sans-serif;">
+            <tr><td style="font-weight: bold; width: 250px; padding: 8px 0;">Total Mass:</td><td>{totals['mass']:,.2f} kg</td></tr>
+            <tr><td style="font-weight: bold; padding: 8px 0; background-color: #f0f0f0;">Total Embodied Energy:</td><td style="background-color: #f0f0f0;">{totals['ee']:,.2f} GJ</td></tr>
+            <tr><td style="font-weight: bold; padding: 8px 0;">Total Embodied Carbon:</td><td>{totals['ec']:,.2f} kgCO2</td></tr>
+            <tr><td style="font-weight: bold; padding: 8px 0; background-color: #f0f0f0;">Total GWP100:</td><td style="background-color: #f0f0f0;">{totals['gwp']:,.2f} kgCO2e</td></tr>
+        </table>
+    </div>
+    """
+    st.markdown(totals_html, unsafe_allow_html=True)
 
 def welcome_dashboard():
     st.title("Sustainability Assessment System")
@@ -726,7 +864,6 @@ def main_application():
                     component_list = [c.strip() for c in components_str.split(",") if "Extra" not in c.strip()]
                     
                     for comp in component_list:
-                        # Safely extract the default unit directly from the Google Sheet
                         default_unit = "m3"
                         if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                             match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp).strip().lower()
@@ -777,26 +914,17 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                # The Master Fallback List (Always fully accessible)
-                master_units = ["m3", "tonnes", "kg", "L", "m", "m2", "units", "% by vol.", "% of wt.", "% by conc. vol."]
-                sheet_units = []
+                # The Universal Units list giving you complete freedom even during duplication
+                units = ["m3", "tonnes", "kg", "L", "m", "m2", "units", "% by vol.", "% of wt.", "% by conc. vol."]
                 
-                # Fetch specific unit options dynamically from Google Sheets to place at the top of the list
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp["base_name"]).strip().lower()
                     unit_row = db["unit_logic"][match_mask]
                     if not unit_row.empty and "Unit_Options" in unit_row.columns:
-                        sheet_units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
-
-                # Combine the Google Sheet specific units with the master list to guarantee absolute freedom
-                units = []
-                for u in sheet_units + master_units:
-                    if u not in units:
-                        units.append(u)
+                        units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
 
                 mats_to_remove = []
                 
-                # Material Data Entry
                 for mat in comp["materials"]:
                     col_label, col_mix, col_qty, col_unit, col_del = st.columns([2.5, 3, 1.5, 1.5, 1])
                     
@@ -807,7 +935,6 @@ def main_application():
                     with col_qty:
                         mat["qty"] = st.number_input("Amount", min_value=0.0, step=0.1, value=float(mat.get("qty", 0.0)), key=f"qty_{mat['id']}")
                     with col_unit:
-                        # Append their uniquely saved unit in case they are duplicating an old/unusual project
                         if mat["unit"] not in units:
                             units.append(mat["unit"])
                         mat["unit"] = st.selectbox("Unit", units, index=units.index(mat["unit"]), key=f"unit_{mat['id']}")
@@ -860,165 +987,25 @@ def main_application():
 
             st.markdown("---")
             
-            # Step 1: Calculate Project Totals
             if st.button("Calculate Project Totals", type="primary", use_container_width=True):
                 with st.spinner("Processing calculations..."):
-                    results_list = []
-                    grand_totals = {"mass": 0.0, "ee": 0.0, "ec": 0.0, "gwp": 0.0}
-                    clean_project_data = []
-
-                    # PRE-SCAN
-                    concrete_volumes_cache = {}
-                    steel_weights_cache = {}
-                    total_project_uhpc_volume_m3 = 0.0
+                    df, totals, clean_data = calculate_project_data(st.session_state.draft_components, db, user_mixes, factors_df)
                     
-                    for comp in st.session_state.draft_components:
-                        c_multiplier = int(comp.get("count", 1))
-                        conc_vol_m3 = 0.0
-                        steel_weight_tonnes = 0.0
-                        
-                        for mat in comp["materials"]:
-                            qty = safe_float(mat["qty"])
-                            unit_str = mat["unit"]
-                            mix_name = mat["mix"]
-                            logic_type = get_unit_logic_type(unit_str)
-                            
-                            total_vol = 0.0
-                            if logic_type == "PER_UNIT":
-                                total_vol = qty * c_multiplier
-                            elif logic_type in ["BASIC", "BASIC_LITER"]:
-                                total_vol = qty * c_multiplier
-                                
-                            if "m3" in unit_str and logic_type in ["BASIC", "PER_UNIT"]:
-                                conc_vol_m3 += total_vol
-                                if mix_name != "--- Select ---" and "UHPC" in mix_name.upper():
-                                    total_project_uhpc_volume_m3 += total_vol
-                            
-                            if "tonnes" in unit_str and logic_type in ["BASIC", "PER_UNIT"]:
-                                steel_weight_tonnes += total_vol
-                                
-                        concrete_volumes_cache[comp["id"]] = conc_vol_m3
-                        if "Main Girders" in comp["base_name"]:
-                            steel_weights_cache["Main Girders"] = steel_weights_cache.get("Main Girders", 0.0) + steel_weight_tonnes
-
-                    # MAIN CALCULATION PASS
-                    for comp_idx, comp in enumerate(st.session_state.draft_components):
-                        c_name = comp["custom_name"] if comp["custom_name"] else comp["base_name"]
-                        c_multiplier = int(comp.get("count", 1))
-                        c_materials = []
-
-                        ref_conc_vol = concrete_volumes_cache.get(comp["id"], 0.0)
-                        ref_steel_weight = steel_weights_cache.get("Main Girders", 0.0)
-
-                        for mat in comp["materials"]:
-                            qty = safe_float(mat["qty"])
-                            unit_str = mat["unit"]
-                            mix = mat["mix"]
-                            logic_type = get_unit_logic_type(unit_str)
-                            
-                            if mix != "--- Select ---" and qty > 0:
-                                props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
-                                mass_per_m3 = props["Mass (kg/m3)"]
-                                
-                                # Convert to Total Mass (kg)
-                                total_mass_kg = 0.0
-                                
-                                if logic_type == "PERCENT_VOL":
-                                    vol_m3 = (qty / 100.0) * ref_conc_vol
-                                    total_mass_kg = vol_m3 * mass_per_m3
-                                elif logic_type == "UHPC_REF_VOL":
-                                    vol_L = qty * total_project_uhpc_volume_m3
-                                    total_mass_kg = (vol_L / 1000.0) * mass_per_m3
-                                elif logic_type == "PERCENT_WEIGHT":
-                                    weight_tonnes = (qty / 100.0) * ref_steel_weight
-                                    total_mass_kg = weight_tonnes * 1000.0
-                                elif logic_type == "PER_UNIT" or logic_type == "BASIC" or logic_type == "BASIC_LITER":
-                                    base_vol = qty * c_multiplier if logic_type == "PER_UNIT" else qty
-                                    if "tonnes" in unit_str:
-                                        total_mass_kg = base_vol * 1000.0
-                                    elif "kg" in unit_str:
-                                        total_mass_kg = base_vol
-                                    elif logic_type == "BASIC_LITER":
-                                        total_mass_kg = (base_vol / 1000.0) * mass_per_m3
-                                    else:
-                                        total_mass_kg = base_vol * mass_per_m3
-
-                                # Final Totals
-                                item_ee_gj = (total_mass_kg * props["Factor_EE (MJ/kg)"]) / 1000.0
-                                item_ec_kg = total_mass_kg * props["Factor_EC (kgCO2/kg)"]
-                                item_gwp = total_mass_kg * props["Factor_GWP (kgCO2e/kg)"]
-                                
-                                grand_totals["mass"] += total_mass_kg
-                                grand_totals["ee"] += item_ee_gj
-                                grand_totals["ec"] += item_ec_kg
-                                grand_totals["gwp"] += item_gwp
-                                
-                                item_label = f"{comp_idx + 1}. {c_name} {mat.get('label', '')}".strip()
-                                
-                                results_list.append({
-                                    "Item": item_label,
-                                    "Material": mix,
-                                    "Volume": qty,
-                                    "Unit": unit_str,
-                                    "Total Mass (kg)": total_mass_kg,
-                                    "Total EE (GJ)": item_ee_gj,
-                                    "Total EC (kgCO2)": item_ec_kg,
-                                    "Total GWP100 (kgCO2e)": item_gwp
-                                })
-                                
-                            c_materials.append({
-                                "label": mat.get("label", ""),
-                                "quantity": qty,
-                                "unit": unit_str,
-                                "assigned_mix": mix
-                            })
-                                
-                        clean_project_data.append({
-                            "base_name": comp["base_name"],
-                            "component_name": c_name,
-                            "multiplier_count": c_multiplier,
-                            "materials": c_materials
-                        })
-                    
-                    if len(results_list) > 0:
-                        st.session_state.project_results_df = pd.DataFrame(results_list)
-                        st.session_state.project_totals = grand_totals
-                        st.session_state.project_clean_data = clean_project_data
+                    if df is not None:
+                        st.session_state.project_results_df = df
+                        st.session_state.project_totals = totals
+                        st.session_state.project_clean_data = clean_data
                     else:
-                        st.error("Please assign at least one material with an amount > 0.")
+                        st.error("Please assign at least one valid material with an amount > 0.")
                     st.rerun()
 
             # --- RESULTS DISPLAY & SAVE BUTTON ---
             if st.session_state.project_results_df is not None:
                 st.markdown("---")
                 
-                # Render using st.table for the classic, static engineering report look
-                display_df = st.session_state.project_results_df.copy()
-                display_df.index = display_df.index + 1 
+                # Render the exact same table that will be seen in Tab 3
+                render_results_table_and_totals(st.session_state.project_results_df, st.session_state.project_totals)
                 
-                display_df["Volume"] = display_df["Volume"].apply(lambda x: f"{float(x):,.2f}")
-                display_df["Total Mass (kg)"] = display_df["Total Mass (kg)"].apply(lambda x: f"{float(x):,.2f}")
-                display_df["Total EE (GJ)"] = display_df["Total EE (GJ)"].apply(lambda x: f"{float(x):,.2f}")
-                display_df["Total EC (kgCO2)"] = display_df["Total EC (kgCO2)"].apply(lambda x: f"{float(x):,.2f}")
-                display_df["Total GWP100 (kgCO2e)"] = display_df["Total GWP100 (kgCO2e)"].apply(lambda x: f"{float(x):,.2f}")
-                
-                st.table(display_df)
-                
-                # Render Grand Totals in a styled HTML box matching the PySide6 UI exactly
-                totals_html = f"""
-                <div style="border: 1px solid #d3d3d3; border-radius: 5px; padding: 20px; background-color: #f9f9f9; margin-bottom: 20px;">
-                    <h4 style="margin-top: 0; color: #000; font-family: sans-serif;">Project Grand Totals</h4>
-                    <table style="width: 100%; border-collapse: collapse; font-size: 16px; color: #000; font-family: sans-serif;">
-                        <tr><td style="font-weight: bold; width: 250px; padding: 8px 0;">Total Mass:</td><td>{st.session_state.project_totals['mass']:,.2f} kg</td></tr>
-                        <tr><td style="font-weight: bold; padding: 8px 0; background-color: #f0f0f0;">Total Embodied Energy:</td><td style="background-color: #f0f0f0;">{st.session_state.project_totals['ee']:,.2f} GJ</td></tr>
-                        <tr><td style="font-weight: bold; padding: 8px 0;">Total Embodied Carbon:</td><td>{st.session_state.project_totals['ec']:,.2f} kgCO2</td></tr>
-                        <tr><td style="font-weight: bold; padding: 8px 0; background-color: #f0f0f0;">Total GWP100:</td><td style="background-color: #f0f0f0;">{st.session_state.project_totals['gwp']:,.2f} kgCO2e</td></tr>
-                    </table>
-                </div>
-                """
-                st.markdown(totals_html, unsafe_allow_html=True)
-                
-                # Step 2: Save Project Button
                 if st.button("Save Project"):
                     if not st.session_state.draft_proj_name:
                         st.error("Please enter a Project Name at the top of the page to save.")
@@ -1085,33 +1072,18 @@ def main_application():
             for p in user_projects:
                 with st.expander(f"{p['project_name']} | Structure: {p['structure_type']} | Carbon: {p['total_embodied_carbon']:,.2f} kgCO2e"):
                     
-                    clean_data = []
-                    if isinstance(p["component_data"], list):
-                        for comp in p["component_data"]:
-                            c_name = comp.get("component_name", "Unknown")
-                            c_count = comp.get("multiplier_count", 1)
-                            for mat in comp.get("materials", []):
-                                clean_data.append({
-                                    "Component": c_name,
-                                    "Multiplier": c_count,
-                                    "Label/Note": mat.get("label", ""),
-                                    "Material": mat.get("assigned_mix", ""),
-                                    "Amount": mat.get("quantity", 0),
-                                    "Unit": mat.get("unit", "")
-                                })
-                    elif isinstance(p["component_data"], dict):
-                        for c_name, c_details in p["component_data"].items():
-                            clean_data.append({
-                                "Component": c_name,
-                                "Multiplier": 1,
-                                "Label/Note": "",
-                                "Material": c_details.get("assigned_mix", ""),
-                                "Amount": c_details.get("quantity", 0),
-                                "Unit": c_details.get("unit", "")
-                            })
-                        
-                    st.markdown("**Component Details:**")
-                    st.dataframe(pd.DataFrame(clean_data), hide_index=True, use_container_width=True)
+                    # Convert saved components back into the active logic format
+                    draft_comps = reconstruct_draft_components(p, db)
+                    
+                    # Secretly run the calculation engine to generate the detailed engineering tables live!
+                    df, totals, _ = calculate_project_data(draft_comps, db, user_mixes, factors_df)
+                    
+                    if df is not None:
+                        render_results_table_and_totals(df, totals)
+                    else:
+                        st.info("No calculable materials found in this project.")
+                    
+                    st.markdown("---")
                     
                     proj_id = p.get('id', str(p.get('project_name')))
                     del_key = f"del_proj_confirm_{proj_id}"
