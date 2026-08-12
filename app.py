@@ -9,6 +9,7 @@ import uuid
 
 st.set_page_config(page_title="Sustainability Assessment System", layout="wide")
 
+# Custom CSS for the green calculate button and table formatting
 st.markdown("""
 <style>
 /* Target the Streamlit primary button specifically */
@@ -37,6 +38,9 @@ th {
 </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# 1. CONNECT TO CLOUD SERVICES
+# ==========================================
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
@@ -85,10 +89,14 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
+# ==========================================
+# 2. FETCH DATA SAFELY (RAM OPTIMISED)
+# ==========================================
 @st.cache_data(ttl=600) 
 def load_database():
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
     
+    # 1. Try fetching from Cloud (Google Sheets)
     if SHEET_ID and len(SHEET_ID) > 20: 
         export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
         try:
@@ -105,8 +113,9 @@ def load_database():
             }
         except Exception as e:
             print(f"Warning: Cloud Database failed to load. Reason: {e}")
-            pass 
+            pass # Fall back to local file
             
+    # 2. Fall back to Local File
     local_path = "materials_database.xlsx"
     if os.path.exists(local_path):
         try:
@@ -125,6 +134,9 @@ def load_database():
     print("Critical Error: Both Cloud and Local databases are missing or unreachable.")
     return None
 
+# ==========================================
+# 3. SECURE LOGIN UI & HELPERS
+# ==========================================
 def login_page():
     st.title("Sustainability Assessment System")
     st.markdown("Please authenticate to access the assessment modules.")
@@ -174,6 +186,7 @@ def reconstruct_draft_components(p_data, db):
                     "quantity": c_details.get("quantity", 0.0),
                     "unit": c_details.get("unit", "m3"),
                     "ref_value": c_details.get("ref_value", 0.0),
+                    "ref_per_unit": c_details.get("ref_per_unit", False),
                     "assigned_mix": c_details.get("assigned_mix", "--- Select ---")
                 }]
             })
@@ -198,6 +211,7 @@ def reconstruct_draft_components(p_data, db):
                 "qty": m_data.get("quantity", 0.0),
                 "unit": m_data.get("unit", "m3"),
                 "ref_value": m_data.get("ref_value", 0.0),
+                "ref_per_unit": m_data.get("ref_per_unit", False),
                 "mix": m_data.get("assigned_mix", "--- Select ---")
             })
             
@@ -299,9 +313,6 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
     grand_totals = {"mass": 0.0, "ee": 0.0, "ec": 0.0, "gwp": 0.0}
     clean_project_data = []
 
-    # The background PRE-SCAN has been completely removed! 
-    # The math is now strictly locked to the user's explicit input.
-    
     for comp_idx, comp in enumerate(draft_components):
         c_name = comp.get("custom_name", comp.get("base_name", "Unknown"))
         c_multiplier = int(comp.get("count", 1))
@@ -311,7 +322,10 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
             qty = safe_float(mat.get("qty", 0.0))
             unit_str = mat.get("unit", "")
             mix = mat.get("mix", "--- Select ---")
+            
+            # Explicit reference inputs provided by the user
             ref_val = safe_float(mat.get("ref_value", 0.0))
+            ref_per_unit = mat.get("ref_per_unit", False)
             
             logic_type = get_unit_logic_type(unit_str)
             
@@ -322,12 +336,17 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 total_mass_kg = 0.0
                 
                 # Math based explicitly on the user's reference input!
-                if logic_type == "PERCENT_VOL" or logic_type == "UHPC_REF_VOL":
-                    vol_m3 = (qty / 100.0) * ref_val
-                    total_mass_kg = vol_m3 * mass_per_m3
-                elif logic_type == "PERCENT_WEIGHT":
-                    weight_tonnes = (qty / 100.0) * ref_val
-                    total_mass_kg = weight_tonnes * 1000.0
+                if logic_type == "PERCENT_VOL" or logic_type == "UHPC_REF_VOL" or logic_type == "PERCENT_WEIGHT":
+                    
+                    # Check if the user wants us to multiply the reference value by the Component count
+                    actual_ref_val = (ref_val * c_multiplier) if ref_per_unit else ref_val
+                    
+                    if logic_type == "PERCENT_VOL" or logic_type == "UHPC_REF_VOL":
+                        vol_m3 = (qty / 100.0) * actual_ref_val
+                        total_mass_kg = vol_m3 * mass_per_m3
+                    elif logic_type == "PERCENT_WEIGHT":
+                        weight_tonnes = (qty / 100.0) * actual_ref_val
+                        total_mass_kg = weight_tonnes * 1000.0
                     
                 # Standard volume/weight math
                 elif logic_type in ["PER_UNIT", "BASIC", "BASIC_LITER"]:
@@ -353,7 +372,12 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 
                 # Display Formatting (show the reference number in the table if used)
                 item_label = f"{comp_idx + 1}. {c_name} {mat.get('label', '')}".strip()
-                display_qty = f"{qty}" if logic_type not in ["PERCENT_VOL", "PERCENT_WEIGHT", "UHPC_REF_VOL"] else f"{qty} (Ref: {ref_val})"
+                
+                if logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "UHPC_REF_VOL"]:
+                    mult_tag = " × Qty" if ref_per_unit else ""
+                    display_qty = f"{qty} (Ref: {ref_val}{mult_tag})"
+                else:
+                    display_qty = f"{qty}"
                 
                 results_list.append({
                     "Item": item_label,
@@ -371,6 +395,7 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 "quantity": qty,
                 "unit": unit_str,
                 "ref_value": ref_val,
+                "ref_per_unit": ref_per_unit,
                 "assigned_mix": mix
             })
                 
@@ -843,6 +868,7 @@ def main_application():
                                 "qty": 0.0,
                                 "unit": default_unit,
                                 "ref_value": 0.0,
+                                "ref_per_unit": False,
                                 "mix": "--- Select ---"
                             }]
                         })
@@ -894,7 +920,8 @@ def main_application():
                     needs_ref = logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "UHPC_REF_VOL"]
                     
                     if needs_ref:
-                        col_label, col_mix, col_qty, col_unit, col_ref, col_del = st.columns([2, 2.5, 1.2, 1.5, 1.5, 0.8])
+                        # Extra columns for Ref Value and the Checkbox
+                        col_label, col_mix, col_qty, col_unit, col_ref, col_mult, col_del = st.columns([1.8, 2.2, 1.0, 1.2, 1.2, 0.8, 0.8])
                     else:
                         col_label, col_mix, col_qty, col_unit, col_del = st.columns([2.5, 3, 1.5, 1.5, 1])
                     
@@ -911,10 +938,14 @@ def main_application():
                         
                     if needs_ref:
                         with col_ref:
-                            ref_label = "Ref Weight (tonnes)" if logic_type == "PERCENT_WEIGHT" else "Ref Volume (m³)"
+                            ref_label = "Ref Wt (tonnes)" if logic_type == "PERCENT_WEIGHT" else "Ref Vol (m³)"
                             mat["ref_value"] = st.number_input(ref_label, min_value=0.0, step=0.1, value=float(mat.get("ref_value", 0.0)), key=f"ref_{mat['id']}")
+                        with col_mult:
+                            st.markdown("<br>", unsafe_allow_html=True) 
+                            mat["ref_per_unit"] = st.checkbox("× Qty", value=bool(mat.get("ref_per_unit", False)), key=f"mult_{mat['id']}", help="Check if this reference is for ONE unit (will multiply by the Component Quantity).")
                     else:
                         mat["ref_value"] = 0.0 
+                        mat["ref_per_unit"] = False
                         
                     with col_del:
                         st.markdown("<br>", unsafe_allow_html=True)
@@ -935,6 +966,7 @@ def main_application():
                             "qty": 0.0,
                             "unit": units[0],
                             "ref_value": 0.0,
+                            "ref_per_unit": False,
                             "mix": "--- Select ---"
                         })
                         st.rerun()
@@ -960,6 +992,7 @@ def main_application():
                         "qty": 0.0,
                         "unit": "m3",
                         "ref_value": 0.0,
+                        "ref_per_unit": False,
                         "mix": "--- Select ---"
                     }]
                 })
