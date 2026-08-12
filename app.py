@@ -32,7 +32,6 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
     background-color: #2563eb;
 }
 
-/* Intelligent Button Coloring via CSS Sibling Selectors */
 /* Green Save Buttons */
 div.element-container:has(span.btn-green) + div.element-container button {
     background-color: #10b981 !important;
@@ -55,7 +54,7 @@ div.element-container:has(span.btn-red) + div.element-container button:hover {
     background-color: #dc2626 !important;
 }
 
-/* Blue Action/Modify Buttons */
+/* Blue Action/Calculate Buttons */
 div.element-container:has(span.btn-blue) + div.element-container button {
     background-color: #3b82f6 !important;
     color: white !important;
@@ -64,6 +63,17 @@ div.element-container:has(span.btn-blue) + div.element-container button {
 }
 div.element-container:has(span.btn-blue) + div.element-container button:hover {
     background-color: #2563eb !important;
+}
+
+/* Grey Clone/Duplicate Buttons */
+div.element-container:has(span.btn-grey) + div.element-container button {
+    background-color: #64748b !important;
+    color: white !important;
+    border: none !important;
+    font-weight: bold !important;
+}
+div.element-container:has(span.btn-grey) + div.element-container button:hover {
+    background-color: #475569 !important;
 }
 
 /* Style static tables to look like the engineering report */
@@ -95,6 +105,8 @@ if "user_email" not in st.session_state:
     st.session_state.user_email = None
 if "current_page" not in st.session_state:
     st.session_state.current_page = "Home"
+if "mix_mode_radio" not in st.session_state:
+    st.session_state.mix_mode_radio = "View Standard Materials"
 
 # Background Draft Memory for Project Assessment
 if "draft_proj_name" not in st.session_state:
@@ -127,7 +139,7 @@ def generate_pdf_report(df, best, worst, savings):
         summary = (f"This comparative analysis evaluates the Embodied Carbon Intensity (ECI) across selected materials. "
                    f"Choosing the optimal material ({best['Material']}) instead of the highest-impact option ({worst['Material']}) "
                    f"results in a {savings:.1f}% reduction in embodied carbon per cubic metre. "
-                   f"For large-scale infrastructure, this substitution is a highly effective decarbonisation strategy.")
+                   f"For large-scale infrastructure applications, this material substitution represents a highly effective decarbonisation strategy.")
         pdf.multi_cell(0, 6, summary)
         pdf.ln(10)
         
@@ -198,18 +210,16 @@ def load_database():
     return None
 
 def login_page():
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
     
     with col2:
         st.markdown("""
-        <div style="text-align: center; padding: 20px;">
+        <div style="text-align: center; padding-bottom: 20px;">
             <h1 style="color: #f8fafc; font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
-            <p style="color: #94a3b8; font-size: 16px;">Enterprise platform for structural carbon accounting and sustainable material optimisation.</p>
+            <p style="color: #94a3b8; font-size: 16px;">Please log in to access your structural carbon accounting workspace.</p>
         </div>
         """, unsafe_allow_html=True)
-        
-        st.markdown("""<div style="background-color: #1e293b; padding: 40px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">""", unsafe_allow_html=True)
         
         email = st.text_input("Corporate Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
@@ -225,8 +235,6 @@ def login_page():
                 st.rerun() 
             except Exception:
                 st.error("Invalid email or password. Please contact your administrator for access.")
-                
-        st.markdown("</div>", unsafe_allow_html=True)
 
 def load_project_to_session(p_data, db):
     """Loads a saved project safely into the Project Assessment tab."""
@@ -291,6 +299,21 @@ def load_project_to_session(p_data, db):
         })
         
     st.session_state.draft_components = new_draft
+
+def load_mix_to_session(m_data):
+    """Loads a saved mix safely into the Materials & Mixes builder."""
+    st.session_state.current_page = "Materials & Mixes"
+    st.session_state.mix_mode_radio = "Create Custom Material / Mix"
+    
+    st.session_state.draft_mix_name = f"{m_data['mix_name']} (Copy)"
+    st.session_state.draft_mix_cat = m_data['category']
+    st.session_state.draft_mix_comps = m_data.get("components", {})
+    
+    adhoc_list = m_data.get("adhoc_materials", [])
+    if adhoc_list:
+        st.session_state.adhoc_mats = pd.DataFrame(adhoc_list)
+    else:
+        st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
 
 def get_unit_logic_type(unit_string):
     """Dynamically determines math logic based on the user's unit selection."""
@@ -560,13 +583,20 @@ def main_application():
     # TAB 1: MATERIALS & MIXES
     # ---------------------------------------------------------
     if st.session_state.current_page == "Materials & Mixes":
-
-        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Material / Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
+        
+        default_mode_idx = 0
+        if st.session_state.get("mix_mode_radio") == "Create Custom Material / Mix":
+            default_mode_idx = 1
+        elif st.session_state.get("mix_mode_radio") == "Compare Mixes":
+            default_mode_idx = 2
+            
+        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Material / Mix", "Compare Mixes"], horizontal=True, index=default_mode_idx, key="mix_mode_radio_ui")
+        
+        if st.session_state.mix_mode_radio != mode:
+            st.session_state.mix_mode_radio = mode
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
-        direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in direct_cats else set()
-        if not db["direct"].empty and "Category" in db["direct"].columns:
-            direct_cats = set(db["direct"]["Category"].dropna().unique())
+        direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
         all_categories = sorted(list(mix_cats.union(direct_cats)))
         
         if mode == "View Standard Materials":
@@ -674,11 +704,15 @@ def main_application():
         elif mode == "Create Custom Material / Mix":
             st.markdown("#### Design a Custom Material or Mix")
             
+            d_name = st.session_state.get("draft_mix_name", "")
+            d_cat = st.session_state.get("draft_mix_cat", "--- Select Category ---")
+            
             c_col1, c_col2 = st.columns(2)
             with c_col1:
-                custom_cat = st.selectbox("Assign to Category:", ["--- Select Category ---"] + all_categories, key="cust_cat")
+                cat_index = all_categories.index(d_cat) + 1 if d_cat in all_categories else 0
+                custom_cat = st.selectbox("Assign to Category:", ["--- Select Category ---"] + all_categories, index=cat_index, key="cust_cat")
             with c_col2:
-                custom_mix_name = st.text_input("Name your Custom Item:", placeholder="e.g., C40/50 or Recycled Steel", key="mix_name_input")
+                custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key="mix_name_input")
             
             st.markdown("---")
             creation_type = st.radio("What type of item are you creating?", 
@@ -731,10 +765,12 @@ def main_application():
                     all_comps = []
                 
                 raw_input_data = {}
+                d_comps = st.session_state.get("draft_mix_comps", {})
                 
                 input_cols = st.columns(4)
                 for i, comp in enumerate(all_comps):
-                    val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, key=f"cust_comp_{comp}")
+                    default_val = float(d_comps.get(comp, 0.0))
+                    val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, value=default_val, key=f"cust_comp_{comp}")
                     if val > 0:
                         raw_input_data[comp] = val
                         
@@ -845,29 +881,65 @@ def main_application():
                 elif len(custom_mix_data) == 0 and len(valid_adhoc) == 0:
                     st.error("Please add at least one ingredient or property.")
                 else:
-                    existing_duplicate = [m for m in user_mixes if m['mix_name'] == custom_mix_name and m['category'] == custom_cat]
-                    if len(existing_duplicate) > 0:
-                        st.error(f"An item named '{custom_mix_name}' already exists in the '{custom_cat}' category. Please choose a different name.")
+                    mix_payload = {
+                        "user_id": st.session_state.user_id,
+                        "mix_name": custom_mix_name,
+                        "category": custom_cat,
+                        "components": custom_mix_data,
+                        "adhoc_materials": valid_adhoc
+                    }
+                    existing_mix = next((m for m in user_mixes if m['mix_name'] == custom_mix_name and m['category'] == custom_cat), None)
+                    
+                    if existing_mix:
+                        st.session_state.confirm_overwrite_mix_name = custom_mix_name
+                        st.session_state.existing_mix_id = existing_mix['id']
+                        st.session_state.mix_payload_draft = mix_payload
+                        st.rerun()
                     else:
-                        mix_payload = {
-                            "user_id": st.session_state.user_id,
-                            "mix_name": custom_mix_name,
-                            "category": custom_cat,
-                            "components": custom_mix_data,
-                            "adhoc_materials": valid_adhoc
-                        }
-                        try:
-                            supabase.table("user_mixes").insert(mix_payload).execute()
-                            st.success(f"'{custom_mix_name}' saved successfully. Clearing form...")
+                        st.session_state.execute_mix_save = True
+                        st.session_state.mix_payload_draft = mix_payload
+                        st.rerun()
+                        
+            if st.session_state.get("confirm_overwrite_mix_name"):
+                st.warning(f"A mix named '{st.session_state.confirm_overwrite_mix_name}' already exists in this category. Do you want to overwrite it?")
+                col_y, col_n = st.columns(2)
+                with col_y:
+                    st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
+                    if st.button("Yes, Overwrite"):
+                        st.session_state.execute_mix_save = True
+                        st.session_state.confirm_overwrite_mix_name = None
+                        st.rerun()
+                with col_n:
+                    if st.button("No, Change Name"):
+                        st.session_state.confirm_overwrite_mix_name = None
+                        st.session_state.mix_payload_draft = None
+                        st.rerun()
+                        
+            if st.session_state.get("execute_mix_save"):
+                payload = st.session_state.mix_payload_draft
+                try:
+                    if st.session_state.get("existing_mix_id"):
+                        supabase.table("user_mixes").update(payload).eq("id", st.session_state.existing_mix_id).execute()
+                        st.success(f"Mix '{payload['mix_name']}' successfully overwritten! Clearing form...")
+                    else:
+                        supabase.table("user_mixes").insert(payload).execute()
+                        st.success(f"'{payload['mix_name']}' saved successfully. Clearing form...")
+                    
+                    # Clear draft states
+                    if "draft_mix_name" in st.session_state: del st.session_state.draft_mix_name
+                    if "draft_mix_cat" in st.session_state: del st.session_state.draft_mix_cat
+                    if "draft_mix_comps" in st.session_state: del st.session_state.draft_mix_comps
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("cust_comp_") or key in ["mix_name_input", "cust_cat", "adhoc_mats"]:
+                            del st.session_state[key]
                             
-                            for key in list(st.session_state.keys()):
-                                if key.startswith("cust_comp_") or key in ["mix_name_input", "cust_cat", "adhoc_mats"]:
-                                    del st.session_state[key]
-                            
-                            time.sleep(1.5)
-                            st.rerun() 
-                        except Exception as e:
-                            st.error(f"Database Save Error: Details: {e}")
+                    st.session_state.execute_mix_save = False
+                    st.session_state.existing_mix_id = None
+                    time.sleep(1.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Database Save Error: Details: {e}")
+                    st.session_state.execute_mix_save = False
 
         elif mode == "Compare Mixes":
             st.markdown("#### Compare Materials & Mixes")
@@ -910,7 +982,7 @@ def main_application():
                         yielding a Global Warming Potential (GWP100) of <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong> at a density of <strong>{best['Total Mass (kg/m³)']:,.2f} kg/m³</strong>.
                         <br><br>
                         Choosing the optimal material (<strong>{best['Material']}</strong>) instead of the highest-impact option (<strong>{worst['Material']}</strong>) results in a 
-                        <strong>{savings_pct:.1f}% reduction</strong> in embodied carbon per cubic metre. For large-scale infrastructure, this substitution is a highly effective decarbonisation strategy.
+                        <strong>{savings_pct:.1f}% reduction</strong> in embodied carbon per cubic metre. For large-scale infrastructure applications, this material substitution represents a highly effective decarbonisation strategy.
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -919,7 +991,7 @@ def main_application():
                     tab_bar, tab_scatter = st.tabs(["Carbon Leaderboard", "Density vs. Carbon Trade-off"])
                     
                     with tab_bar:
-                        best_val = float(best['Total GWP100 (kgCO2e/m³)'])
+                        best_val = float(best['Total GWP100 (kgCO2e/m³)']) 
                         
                         base_chart = alt.Chart(comp_df).encode(
                             x=alt.X("Total GWP100 (kgCO2e/m³):Q", title="Global Warming Potential (kgCO2e/m³)", scale=alt.Scale(domain=[0, comp_df["Total GWP100 (kgCO2e/m³)"].max() * 1.15])),
@@ -944,7 +1016,7 @@ def main_application():
                             text=alt.Text('Total GWP100 (kgCO2e/m³):Q', format=',.2f')
                         )
                         
-                        final_bar_chart = (bars + text).properties(height=alt.Step(60))
+                        final_bar_chart = (bars + text).properties(height=alt.Step(60)) 
                         st.altair_chart(final_bar_chart, use_container_width=True)
                         
                     with tab_scatter:
@@ -1261,7 +1333,7 @@ def main_application():
                             st.session_state.confirm_overwrite_name = None
                             st.rerun()
                     with col_n:
-                        if st.button("No, Rename"):
+                        if st.button("No, Change Name"):
                             st.session_state.confirm_overwrite_name = None
                             st.rerun()
                 
@@ -1393,8 +1465,8 @@ def main_application():
                         
                         with btn_col_a:
                             st.markdown("<br>", unsafe_allow_html=True)
-                            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-                            st.button("Edit Project In Builder", key=f"load_proj_{proj_id}", on_click=load_project_to_session, args=(p, db))
+                            st.markdown('<span class="btn-grey"></span>', unsafe_allow_html=True)
+                            st.button("Clone for Editing", key=f"load_proj_{proj_id}", on_click=load_project_to_session, args=(p, db))
                                 
                         with btn_col_b:
                             st.markdown("<br>", unsafe_allow_html=True)
@@ -1524,33 +1596,32 @@ def main_application():
                         
                         with col_dup:
                             st.markdown("<br>", unsafe_allow_html=True)
-                            st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-                            if st.button("Duplicate Mix", key=f"dup_m_{m['id']}"):
-                                new_copy_name = f"{m['mix_name']} (Copy)"
-                                mix_payload = {
-                                    "user_id": st.session_state.user_id,
-                                    "mix_name": new_copy_name,
-                                    "category": m['category'],
-                                    "components": m.get("components", {}),
-                                    "adhoc_materials": m.get("adhoc_materials", [])
-                                }
-                                try:
-                                    supabase.table("user_mixes").insert(mix_payload).execute()
-                                    st.success("Mix successfully duplicated!")
-                                    st.session_state.lib_selected_mix = new_copy_name
-                                    time.sleep(1)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Database Save Error: {e}")
+                            st.markdown('<span class="btn-grey"></span>', unsafe_allow_html=True)
+                            st.button("Clone for Editing", key=f"dup_m_{m['id']}", on_click=load_mix_to_session, args=(m,))
 
                         with col_del:
                             st.markdown("<br>", unsafe_allow_html=True)
-                            st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                            if st.button("Delete Mix", key=f"del_m_{m['id']}"):
-                                supabase.table("user_mixes").delete().eq("id", m['id']).execute()
-                                st.success("Mix deleted.")
-                                time.sleep(1)
-                                st.rerun()
+                            del_m_key = f"del_mix_confirm_{m['id']}"
+                            if not st.session_state.get(del_m_key, False):
+                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                if st.button("Delete Mix", key=f"btn_del_init_mix_{m['id']}"):
+                                    st.session_state[del_m_key] = True
+                                    st.rerun()
+                            else:
+                                st.warning("Are you sure? This cannot be undone.")
+                                y_m_col, n_m_col = st.columns(2)
+                                with y_m_col:
+                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                    if st.button("Yes, Delete", key=f"btn_del_yes_mix_{m['id']}"):
+                                        supabase.table("user_mixes").delete().eq("id", m['id']).execute()
+                                        st.session_state[del_m_key] = False
+                                        st.success("Mix deleted.")
+                                        time.sleep(1)
+                                        st.rerun()
+                                with n_m_col:
+                                    if st.button("Cancel", key=f"btn_del_no_mix_{m['id']}"):
+                                        st.session_state[del_m_key] = False
+                                        st.rerun()
 
 if st.session_state.user_id is None:
     login_page()
