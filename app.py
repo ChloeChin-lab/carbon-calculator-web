@@ -96,10 +96,12 @@ def safe_float(val, default=0.0):
 def load_database():
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
     
+    # 1. Try fetching from Cloud (Google Sheets)
     if SHEET_ID and len(SHEET_ID) > 20: 
         export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
         try:
-            response = requests.get(export_url)
+            # Added a 10-second timeout so the app never freezes!
+            response = requests.get(export_url, timeout=10)
             response.raise_for_status()
             excel_data = BytesIO(response.content)
             xls = pd.read_excel(excel_data, sheet_name=required_sheets)
@@ -110,9 +112,11 @@ def load_database():
                 "unit_logic": clean_df(xls.get("Unit_Logic", pd.DataFrame())),
                 "direct": clean_df(xls.get("Direct_Results", pd.DataFrame()))
             }
-        except Exception:
-            pass 
-
+        except Exception as e:
+            print(f"Warning: Cloud Database failed to load. Reason: {e}")
+            pass # Fall back to local file
+            
+    # 2. Fall back to Local File
     local_path = "materials_database.xlsx"
     if os.path.exists(local_path):
         try:
@@ -124,8 +128,11 @@ def load_database():
                 "unit_logic": clean_df(xls.get("Unit_Logic", pd.DataFrame())),
                 "direct": clean_df(xls.get("Direct_Results", pd.DataFrame()))
             }
-        except Exception:
+        except Exception as e:
+            print(f"Warning: Local Database failed to load. Reason: {e}")
             return None
+            
+    print("Critical Error: Both Cloud and Local databases are missing or unreachable.")
     return None
 
 # ==========================================
