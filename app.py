@@ -7,8 +7,7 @@ from io import BytesIO
 import altair as alt
 import uuid
 
-# Configure Streamlit layout and window title
-st.set_page_config(page_title="Embodied Carbon", layout="wide")
+st.set_page_config(page_title="Carbon Assessment", layout="wide")
 
 # ==========================================
 # 1. CONNECT TO CLOUD SERVICES
@@ -59,7 +58,6 @@ def safe_float(val, default=0.0):
 # ==========================================
 # 2. FETCH DATA SAFELY (RAM OPTIMISED)
 # ==========================================
-# Cache set to 10 minutes (600 seconds) for optimal performance and rate-limit safety.
 @st.cache_data(ttl=600) 
 def load_database():
     required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
@@ -100,11 +98,11 @@ def load_database():
     return None
 
 # ==========================================
-# 3. SECURE LOGIN UI
+# 3. SECURE LOGIN & DASHBOARD UI
 # ==========================================
 def login_page():
-    st.title("Embodied Carbon")
-    st.markdown("Please log in to access the engineering platform.")
+    st.title("Structural Carbon Assessment System")
+    st.markdown("Please authenticate to access the assessment modules.")
     
     email = st.text_input("Email", key="login_email")
     password = st.text_input("Password", type="password", key="login_password")
@@ -118,6 +116,50 @@ def login_page():
             st.rerun() 
         except Exception:
             st.error("Invalid email or password. Please contact your administrator for access.")
+
+def welcome_dashboard():
+    st.title("Structural Carbon Assessment System")
+    st.markdown("Select a module below to begin. Use **Materials & Mixes** to configure your ingredients library, and **Project Assessment** to assemble those ingredients into a complete structure.")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 180px;">
+            <h3 style="color: #2C3E50; margin-top: 0; font-size: 20px;">Materials & Mixes</h3>
+            <p style="color: #5D6D7E; font-size: 14px;">View standard material properties, configure custom mix designs, and compare carbon efficiencies side-by-side.</p>
+        </div>
+        <br>
+        """, unsafe_allow_html=True)
+        if st.button("Access", key="btn_acc_mat", use_container_width=True):
+            st.session_state.current_page = "Materials & Mixes"
+            st.rerun()
+        
+    with col2:
+        st.markdown("""
+        <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-top: 4px solid #1ABC9C; height: 180px;">
+            <h3 style="color: #2C3E50; margin-top: 0; font-size: 20px;">Project Assessment</h3>
+            <p style="color: #5D6D7E; font-size: 14px;">Configure building components, apply count multipliers, assign materials, and generate total embodied carbon assessments.</p>
+        </div>
+        <br>
+        """, unsafe_allow_html=True)
+        if st.button("Access", key="btn_acc_proj", use_container_width=True):
+            st.session_state.current_page = "Project Assessment"
+            st.rerun()
+        
+    with col3:
+        st.markdown("""
+        <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 180px;">
+            <h3 style="color: #2C3E50; margin-top: 0; font-size: 20px;">Saved Projects</h3>
+            <p style="color: #5D6D7E; font-size: 14px;">Review, analyse, or delete previously completed structure assessments from the secure cloud account.</p>
+        </div>
+        <br>
+        """, unsafe_allow_html=True)
+        if st.button("Access", key="btn_acc_saved", use_container_width=True):
+            st.session_state.current_page = "Saved Projects"
+            st.rerun()
 
 def load_mix_to_session(mix_data, factors_dataframe):
     """Callback to safely inject data for the Duplicate and Edit button."""
@@ -185,35 +227,6 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
         "Factor (kgCO2e/kg)": factor
     }
 
-def welcome_dashboard():
-    st.title("Embodied Carbon")
-    st.markdown("Please select a module below to begin.")
-    
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("### Materials & Mixes")
-        st.write("View standard material properties, design custom mixes, and compare carbon efficiencies across different designs.")
-        if st.button("Access", key="btn_acc_mat"):
-            st.session_state.current_page = "Materials & Mixes"
-            st.rerun()
-        
-    with col2:
-        st.markdown("### Project Assessment")
-        st.write("Configure building components, assign mix designs to elements, and generate total embodied carbon assessments.")
-        if st.button("Access", key="btn_acc_proj"):
-            st.session_state.current_page = "Project Assessment"
-            st.rerun()
-        
-    with col3:
-        st.markdown("### Saved Projects")
-        st.write("Review, analyse, or delete previously completed structure assessments.")
-        if st.button("Access", key="btn_acc_saved"):
-            st.session_state.current_page = "Saved Projects"
-            st.rerun()
-
 # ==========================================
 # 4. MAIN APPLICATION UI
 # ==========================================
@@ -237,7 +250,7 @@ def main_application():
                      label_visibility="collapsed")
     
     st.sidebar.markdown("---")
-    st.sidebar.success(f"User: {st.session_state.user_email}")
+    st.sidebar.caption(f"User: {st.session_state.user_email}")
         
     if st.sidebar.button("Log Out"):
         st.session_state.user_id = None
@@ -263,12 +276,6 @@ def main_application():
     # ---------------------------------------------------------
     if st.session_state.current_page == "Materials & Mixes":
         
-        col_header, col_nav = st.columns([3, 1])
-        with col_nav:
-            if st.button("Go to Project Assessment ➔", use_container_width=True):
-                st.session_state.current_page = "Project Assessment"
-                st.rerun()
-
         mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
@@ -406,7 +413,7 @@ def main_application():
             elif unit_mode == "US Imperial (lb/yd³)":
                 st.info("Your inputs will be automatically converted to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
                 
-            st.markdown("##### 2. Ingredients")
+            st.markdown("##### 2. Standard Ingredients")
             
             if not factors_df.empty:
                 all_comps = factors_df.index.tolist()
@@ -421,8 +428,8 @@ def main_application():
                 if val > 0:
                     raw_input_data[comp] = val
                     
-            st.markdown("##### 3. Add Missing/Custom Ingredients")
-            st.caption("To remove a row, select the blank grey box on the far left edge of the row and press the Delete key.")
+            st.markdown("##### 3. Add Custom Ingredients")
+            st.caption("To delete a row, click the grey box on the far left edge of the row to highlight it, then press Delete on your keyboard.")
             
             if "adhoc_mats" not in st.session_state:
                 st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)", "ECF (kgCO2/kg)"])
@@ -528,7 +535,7 @@ def main_application():
                 if custom_cat == "--- Select Category ---":
                     st.error("Please assign a category before saving.")
                 elif not custom_mix_name:
-                    st.error("Please provide a professional name for your custom mix (e.g., C40/50).")
+                    st.error("Please provide a name for your custom mix (e.g., C40/50).")
                 elif len(custom_mix_data) == 0 and len(valid_adhoc) == 0:
                     st.error("Please add at least one ingredient.")
                 else:
@@ -548,7 +555,7 @@ def main_application():
                             st.success(f"Custom mix '{custom_mix_name}' saved successfully.")
                             st.rerun() 
                         except Exception as e:
-                            st.error(f"Database Save Error: {e}")
+                            st.error(f"Database Save Error: Verify your table has an 'adhoc_materials' column set to jsonb. Details: {e}")
 
         elif mode == "Compare Mixes":
             st.markdown("#### Compare Mix Designs")
@@ -666,13 +673,30 @@ def main_application():
     # TAB 2: PROJECT ASSESSMENT
     # ---------------------------------------------------------
     elif st.session_state.current_page == "Project Assessment":
-        col_header, col_nav = st.columns([3, 1])
-        with col_nav:
-            if st.button("Need a new mix? Go to Materials & Mixes ➔", use_container_width=True):
-                st.session_state.current_page = "Materials & Mixes"
-                st.rerun()
 
-        st.markdown("### 1. Project Details")
+        col_proj_details, col_clear = st.columns([3, 1])
+        
+        with col_proj_details:
+            st.markdown("### 1. Project Details")
+        with col_clear:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if not st.session_state.get("confirm_clear_all", False):
+                if st.button("Clear All & Start Over"):
+                    st.session_state.confirm_clear_all = True
+                    st.rerun()
+            else:
+                st.warning("Are you sure? All progress will be lost.")
+                col_y, col_n = st.columns(2)
+                if col_y.button("Yes, Clear"):
+                    st.session_state.draft_proj_name = ""
+                    st.session_state.draft_structure = "---"
+                    st.session_state.draft_components = []
+                    st.session_state.confirm_clear_all = False
+                    st.rerun()
+                if col_n.button("Cancel"):
+                    st.session_state.confirm_clear_all = False
+                    st.rerun()
+
         st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name)
         
         structure_options = db["structures"]["Structure_Name"].dropna().tolist() if not db["structures"].empty and "Structure_Name" in db["structures"].columns else []
@@ -697,6 +721,7 @@ def main_application():
                         "id": str(uuid.uuid4()),
                         "base_name": comp,
                         "custom_name": "",
+                        "count": 1,
                         "materials": [{
                             "id": str(uuid.uuid4()),
                             "qty": 0,
@@ -714,7 +739,7 @@ def main_application():
             for comp in st.session_state.draft_components:
                 st.markdown("---")
                 
-                col_title, col_del_comp = st.columns([4, 1])
+                col_title, col_count, col_del_comp = st.columns([3, 1.5, 1])
                 is_extra = "Extra" in comp["base_name"]
 
                 with col_title:
@@ -725,6 +750,9 @@ def main_application():
                     else:
                         display_name = comp["base_name"]
                         st.markdown(f"**Component: {display_name}**")
+
+                with col_count:
+                    comp["count"] = st.number_input("Multiplier (Count)", min_value=1, step=1, value=int(comp.get("count", 1)), key=f"count_{comp['id']}")
 
                 with col_del_comp:
                     if is_extra:
@@ -740,15 +768,16 @@ def main_application():
 
                 mats_to_remove = []
                 
+                # Material Data Entry (Mix -> Amount -> Unit)
                 for mat in comp["materials"]:
-                    col1, col2, col3, col4 = st.columns([3, 2, 4, 1])
+                    col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
                     
                     with col1:
-                        mat["qty"] = st.number_input("Amount", min_value=0, step=1, value=int(mat["qty"]), key=f"qty_{mat['id']}")
-                    with col2:
-                        mat["unit"] = st.selectbox("Unit", units, index=units.index(mat["unit"]) if mat["unit"] in units else 0, key=f"unit_{mat['id']}")
-                    with col3:
                         mat["mix"] = st.selectbox("Select Mix/Material", ["--- Select ---"] + all_available_mixes, index=(["--- Select ---"] + all_available_mixes).index(mat["mix"]) if mat["mix"] in (["--- Select ---"] + all_available_mixes) else 0, key=f"mix_{mat['id']}")
+                    with col2:
+                        mat["qty"] = st.number_input("Amount", min_value=0, step=1, value=int(mat["qty"]), key=f"qty_{mat['id']}")
+                    with col3:
+                        mat["unit"] = st.selectbox("Unit", units, index=units.index(mat["unit"]) if mat["unit"] in units else 0, key=f"unit_{mat['id']}")
                     with col4:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if len(comp["materials"]) > 1: 
@@ -759,33 +788,43 @@ def main_application():
                     comp["materials"].remove(mat)
                     st.rerun()
 
-                if st.button(f"+ Add Material to {display_name}", key=f"add_mat_btn_{comp['id']}"):
-                    comp["materials"].append({
-                        "id": str(uuid.uuid4()),
-                        "qty": 0,
-                        "unit": units[0],
-                        "mix": "--- Select ---"
-                    })
-                    st.rerun()
+                col_add_mat, col_empty = st.columns([1, 4])
+                with col_add_mat:
+                    if st.button(f"+ Add Material", key=f"add_mat_btn_{comp['id']}"):
+                        comp["materials"].append({
+                            "id": str(uuid.uuid4()),
+                            "qty": 0,
+                            "unit": units[0],
+                            "mix": "--- Select ---"
+                        })
+                        st.rerun()
 
             for comp in comps_to_remove:
                 st.session_state.draft_components.remove(comp)
                 st.rerun()
 
             st.markdown("---")
-            if st.button("+ Add a Custom Component"):
-                st.session_state.draft_components.append({
-                    "id": str(uuid.uuid4()),
-                    "base_name": "Extra",
-                    "custom_name": "",
-                    "materials": [{
+            
+            col_add_extra, col_nav_mix = st.columns([1, 1])
+            with col_add_extra:
+                if st.button("+ Add an 'Extra' Component"):
+                    st.session_state.draft_components.append({
                         "id": str(uuid.uuid4()),
-                        "qty": 0,
-                        "unit": "m3",
-                        "mix": "--- Select ---"
-                    }]
-                })
-                st.rerun()
+                        "base_name": "Extra",
+                        "custom_name": "",
+                        "count": 1,
+                        "materials": [{
+                            "id": str(uuid.uuid4()),
+                            "qty": 0,
+                            "unit": "m3",
+                            "mix": "--- Select ---"
+                        }]
+                    })
+                    st.rerun()
+            with col_nav_mix:
+                if st.button("Need a new mix? Go to Materials & Mixes ➔"):
+                    st.session_state.current_page = "Materials & Mixes"
+                    st.rerun()
 
             st.markdown("---")
             
@@ -800,6 +839,7 @@ def main_application():
                         for comp in st.session_state.draft_components:
                             c_name = comp["custom_name"] if ("Extra" in comp["base_name"] and comp["custom_name"]) else comp["base_name"]
                             c_materials = []
+                            c_multiplier = int(comp.get("count", 1))
 
                             for mat in comp["materials"]:
                                 qty = mat["qty"]
@@ -810,7 +850,8 @@ def main_application():
                                     props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
                                     comp_carbon_rate = props["Carbon (kgCO2e/m3)"]
 
-                                total_carbon += qty * comp_carbon_rate
+                                # Total Carbon applies the component multiplier count
+                                total_carbon += (qty * comp_carbon_rate) * c_multiplier
                                 
                                 c_materials.append({
                                     "quantity": qty,
@@ -820,6 +861,7 @@ def main_application():
                                 
                             clean_project_data.append({
                                 "component_name": c_name,
+                                "multiplier_count": c_multiplier,
                                 "materials": c_materials
                             })
                         
@@ -860,20 +902,23 @@ def main_application():
                     if isinstance(p["component_data"], list):
                         for comp in p["component_data"]:
                             c_name = comp.get("component_name", "Unknown")
+                            c_count = comp.get("multiplier_count", 1)
                             for mat in comp.get("materials", []):
                                 clean_data.append({
                                     "Component": c_name,
+                                    "Multiplier": c_count,
+                                    "Material": mat.get("assigned_mix", ""),
                                     "Amount": mat.get("quantity", 0),
-                                    "Unit": mat.get("unit", ""),
-                                    "Assigned Mix": mat.get("assigned_mix", "")
+                                    "Unit": mat.get("unit", "")
                                 })
                     elif isinstance(p["component_data"], dict):
                         for c_name, c_details in p["component_data"].items():
                             clean_data.append({
                                 "Component": c_name,
+                                "Multiplier": 1,
+                                "Material": c_details.get("assigned_mix", ""),
                                 "Amount": c_details.get("quantity", 0),
-                                "Unit": c_details.get("unit", ""),
-                                "Assigned Mix": c_details.get("assigned_mix", "")
+                                "Unit": c_details.get("unit", "")
                             })
                         
                     st.markdown("**Component Details:**")
