@@ -178,7 +178,7 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                 
                 m_gwp = safe_float(direct_row.get("GWP100_kgCO2e_m3", 0.0))
                 if m_gwp == 0.0 and "ECFGWP100_kgCO2e_kg" in direct_row:
-                    m_gwp = safe_float(direct_row.get("ECFGWP100_kgCO2e_kg", 0.0))
+                    m_gwp = safe_float(direct_row.get("ECFGWP100_kgCO2e_kg", 0.0)) * m_mass
                     
     return {
         "Mix": mix_name.replace("Custom: ", ""),
@@ -940,7 +940,7 @@ def main_application():
                             if logic_type == "PER_UNIT":
                                 total_vol = qty * c_multiplier
                             elif logic_type in ["BASIC", "BASIC_LITER"]:
-                                total_vol = qty
+                                total_vol = qty * c_multiplier
                                 
                             if "m3" in unit_str and logic_type in ["BASIC", "PER_UNIT"]:
                                 conc_vol_m3 += total_vol
@@ -987,17 +987,24 @@ def main_application():
                                 elif logic_type == "PER_UNIT":
                                     total_vol = qty * c_multiplier
                                 elif logic_type in ["BASIC", "BASIC_LITER"]:
-                                    total_vol = qty
+                                    total_vol = qty * c_multiplier
                                     
                                 # 2. Convert to total mass (kg)
                                 total_mass_kg = 0.0
-                                if logic_type in ["BASIC", "PER_UNIT"] and "tonnes" in unit_str:
-                                    total_mass_kg = total_vol * 1000.0
+                                if logic_type in ["BASIC", "PER_UNIT"]:
+                                    if "tonnes" in unit_str:
+                                        total_mass_kg = total_vol * 1000.0
+                                    elif "kg" in unit_str:
+                                        total_mass_kg = total_vol
+                                    elif logic_type == "BASIC_LITER":
+                                        total_mass_kg = (total_vol / 1000.0) * mass_per_m3
+                                    else: # Assumes standard m3
+                                        total_mass_kg = total_vol * mass_per_m3
                                 elif logic_type == "PERCENT_WEIGHT":
                                     total_mass_kg = total_vol * 1000.0
-                                else:
-                                    if logic_type in ["BASIC_LITER", "UHPC_REF_VOL"]:
-                                        total_vol = total_vol / 1000.0
+                                elif logic_type == "UHPC_REF_VOL":
+                                    total_mass_kg = (total_vol / 1000.0) * mass_per_m3
+                                elif logic_type == "PERCENT_VOL":
                                     total_mass_kg = total_vol * mass_per_m3
                                 
                                 # 3. Calculate Carbon
