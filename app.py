@@ -156,7 +156,6 @@ def load_project_to_session(p_data, db):
     new_draft = []
     raw_comp_data = p_data.get("component_data", [])
     
-    # Handle older project save formats dynamically
     if isinstance(raw_comp_data, dict):
         converted_list = []
         for c_name, c_details in raw_comp_data.items():
@@ -464,7 +463,7 @@ def main_application():
     # ---------------------------------------------------------
     if st.session_state.current_page == "Materials & Mixes":
 
-        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix", "Manage Saved Mixes"], horizontal=True, key="mix_mode_radio")
+        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Mix", "Manage Saved Mixes", "Compare Mixes"], horizontal=True, key="mix_mode_radio")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -729,7 +728,6 @@ def main_application():
                             supabase.table("user_mixes").insert(mix_payload).execute()
                             st.success(f"Custom mix '{custom_mix_name}' saved successfully. Clearing form...")
                             
-                            # Clean the slate automatically
                             for key in list(st.session_state.keys()):
                                 if key.startswith("cust_comp_") or key in ["mix_name_input", "cust_cat", "adhoc_mats"]:
                                     del st.session_state[key]
@@ -764,6 +762,42 @@ def main_application():
                                 st.success("Mix deleted.")
                                 time.sleep(1)
                                 st.rerun()
+
+        elif mode == "Compare Mixes":
+            st.markdown("#### Compare Materials & Mixes")
+            st.info("Select multiple materials or custom mixes below to compare their environmental impacts side-by-side.")
+            
+            selected_for_comp = st.multiselect("Select Mixes to Compare:", all_available_mixes, key="compare_multiselect")
+            
+            if selected_for_comp:
+                comp_data = []
+                for mix_name in selected_for_comp:
+                    props = calculate_mix_carbon(mix_name, db, user_mixes, factors_df)
+                    mass = props["Mass (kg/m3)"]
+                    gwp = props["Factor_GWP (kgCO2e/kg)"] * mass
+                    comp_data.append({
+                        "Material": mix_name,
+                        "Total Mass (kg/m³)": mass,
+                        "GWP100 Factor (kgCO2e/kg)": props["Factor_GWP (kgCO2e/kg)"],
+                        "Total GWP100 (kgCO2e/m³)": gwp
+                    })
+                    
+                comp_df = pd.DataFrame(comp_data)
+                
+                display_df = comp_df.copy()
+                for col in ["Total Mass (kg/m³)", "GWP100 Factor (kgCO2e/kg)", "Total GWP100 (kgCO2e/m³)"]:
+                    display_df[col] = display_df[col].apply(lambda x: f"{float(x):,.2f}")
+                    
+                st.table(display_df.set_index("Material"))
+                
+                st.markdown("##### GWP100 Comparison (kgCO2e/m³)")
+                bar_chart = alt.Chart(comp_df).mark_bar(color="#4CAF50").encode(
+                    x=alt.X("Material:N", sort=None, axis=alt.Axis(labelAngle=-45)),
+                    y=alt.Y("Total GWP100 (kgCO2e/m³):Q", title="kgCO2e per m³"),
+                    tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
+                ).properties(height=350)
+                
+                st.altair_chart(bar_chart, use_container_width=True)
 
     # ---------------------------------------------------------
     # TAB 2: PROJECT ASSESSMENT
@@ -871,7 +905,7 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                # Massive unrestricted master list for total freedom
+                # Unrestricted master list including all user preferences
                 units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "m", "m2", "units", "% by volume", "% by weight"]
                 
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
@@ -1069,7 +1103,6 @@ def main_application():
                     draft_comps = []
                     raw_data = p.get("component_data", [])
                     if isinstance(raw_data, dict):
-                        # Convert legacy
                         for c_name, c_details in raw_data.items():
                             draft_comps.append({
                                 "custom_name": c_name,
