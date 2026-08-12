@@ -887,6 +887,11 @@ def main_application():
                 
                 for mat in comp["materials"]:
                     
+                    # Fetch immediate widget state to prevent 1-click lag for dynamic pop-ups
+                    unit_key = f"unit_{mat['id']}"
+                    if unit_key in st.session_state:
+                        mat["unit"] = st.session_state[unit_key]
+                        
                     logic_type = get_unit_logic_type(mat["unit"])
                     needs_ref = logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "UHPC_REF_VOL"]
                     
