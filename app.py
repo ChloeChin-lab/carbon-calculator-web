@@ -130,6 +130,15 @@ def load_mix_to_session(mix_data, factors_dataframe):
     if mix_data.get("adhoc_materials"):
         st.session_state["adhoc_mats"] = pd.DataFrame(mix_data["adhoc_materials"])
 
+def get_unit_logic_type(unit_string):
+    """Gets the logic type for a given unit string."""
+    if "/ unit" in unit_string: return "PER_UNIT"
+    if "% by conc. vol." in unit_string: return "PERCENT_VOL"
+    if "% of wt." in unit_string: return "PERCENT_WEIGHT"
+    if "L/m3 of UHPC vol." in unit_string: return "UHPC_REF_VOL"
+    if "L" == unit_string: return "BASIC_LITER"
+    return "BASIC"
+
 def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
     """Helper function to calculate carbon and mass for any mix or direct material."""
     m_mass = 0
@@ -807,32 +816,8 @@ def main_application():
                         })
                         st.rerun()
                 with col_nav_mix:
-                    if st.button("Create New Mix ➔", key=f"nav_mix_{comp['id']}"):
-                        st.session_state.current_page = "Materials & Mixes"
-                        st.rerun()
-
-            for comp in comps_to_remove:
-                st.session_state.draft_components.remove(comp)
-                st.rerun()
-
-            st.markdown("---")
-            
-            col_add_extra, col_nav_mix = st.columns([1, 1])
-            with col_add_extra:
-                if st.button("+ Add an 'Extra' Component"):
-                    st.session_state.draft_components.append({
-                        "id": str(uuid.uuid4()),
-                        "base_name": "Extra",
-                        "custom_name": "Custom Additional Component",
-                        "count": 1,
-                        "materials": [{
-                            "id": str(uuid.uuid4()),
-                            "label": "",
-                            "qty": 0.0,
-                            "unit": "m3",
-                            "mix": "--- Select ---"
-                        }]
-                    })
+                if st.button("Create New Custom Mix"):
+                    st.session_state.current_page = "Materials & Mixes"
                     st.rerun()
 
             st.markdown("---")
@@ -841,58 +826,153 @@ def main_application():
                 if not st.session_state.draft_proj_name:
                     st.error("Please enter a Project Name to save.")
                 else:
-                    with st.spinner("Processing calculations securely..."):
-                        total_carbon = 0
-                        clean_project_data = []
+                    existing_project = next((p for p in user_projects if p['project_name'] == st.session_state.draft_proj_name), None)
+                    if existing_project:
+                        st.session_state.confirm_overwrite_name = st.session_state.draft_proj_name
+                        st.session_state.existing_proj_id = existing_project['id']
+                    else:
+                        st.session_state.execute_save = True
+                        
+            if st.session_state.get("confirm_overwrite_name"):
+                st.warning(f"A project named '{st.session_state.confirm_overwrite_name}' already exists. Do you want to overwrite it?")
+                col_y, col_n = st.columns(2)
+                if col_y.button("Yes, Overwrite"):
+                    st.session_state.execute_save = True
+                    st.session_state.confirm_overwrite_name = None
+                    st.rerun()
+                if col_n.button("No, Rename"):
+                    st.session_state.confirm_overwrite_name = None
+                    st.rerun()
 
-                        for comp in st.session_state.draft_components:
-                            c_name = comp["custom_name"]
-                            c_materials = []
-                            c_multiplier = int(comp.get("count", 1))
+            if st.session_state.get("execute_save"):
+                with st.spinner("Processing calculations securely..."):
+                    total_carbon = 0
+                    clean_project_data = []
 
-                            for mat in comp["materials"]:
-                                qty = mat["qty"]
-                                mix = mat["mix"]
-                                comp_carbon_rate = 0 
+                    # --- PRE-SCAN PASS ---
+                    # Calculate reference volumes needed for proportional units
+                    concrete_volumes_cache = {}
+                    steel_weights_cache = {}
+                    total_project_uhpc_volume_m3 = 0.0
+                    
+                    for comp in st.session_state.draft_components:
+                        c_multiplier = int(comp.get("count", 1))
+                        conc_vol_m3 = 0.0
+                        steel_weight_tonnes = 0.0
+                        
+                        for mat in comp["materials"]:
+                            qty = safe_float(mat["qty"])
+                            unit_str = mat["unit"]
+                            mix_name = mat["mix"]
+                            logic_type = get_unit_logic_type(unit_str)
+                            
+                            total_vol = 0.0
+                            if logic_type == "PER_UNIT":
+                                total_vol = qty * c_multiplier
+                            elif logic_type in ["BASIC", "BASIC_LITER"]:
+                                total_vol = qty
                                 
-                                if mix != "--- Select ---":
-                                    props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
-                                    comp_carbon_rate = props["Carbon (kgCO2e/m3)"]
+                            if "m3" in unit_str and logic_type in ["BASIC", "PER_UNIT"]:
+                                conc_vol_m3 += total_vol
+                                if mix_name != "--- Select ---" and "UHPC" in mix_name.upper():
+                                    total_project_uhpc_volume_m3 += total_vol
+                            
+                            if "tonnes" in unit_str and logic_type in ["BASIC", "PER_UNIT"]:
+                                steel_weight_tonnes += total_vol
+                                
+                        concrete_volumes_cache[comp["id"]] = conc_vol_m3
+                        if "Main Girders" in comp["base_name"]:
+                            steel_weights_cache["Main Girders"] = steel_weights_cache.get("Main Girders", 0.0) + steel_weight_tonnes
 
-                                total_carbon += (qty * comp_carbon_rate) * c_multiplier
+                    # --- MAIN CALCULATION PASS ---
+                    for comp in st.session_state.draft_components:
+                        c_name = comp["custom_name"] if ("Extra" in comp["base_name"] and comp["custom_name"]) else comp["base_name"]
+                        c_materials = []
+                        c_multiplier = int(comp.get("count", 1))
+
+                        ref_conc_vol = concrete_volumes_cache.get(comp["id"], 0.0)
+                        ref_steel_weight = steel_weights_cache.get("Main Girders", 0.0)
+
+                        for mat in comp["materials"]:
+                            qty = safe_float(mat["qty"])
+                            unit_str = mat["unit"]
+                            mix = mat["mix"]
+                            logic_type = get_unit_logic_type(unit_str)
+                            
+                            if mix != "--- Select ---" and qty > 0:
+                                props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
+                                mass_per_m3 = props["Mass (kg/m3)"]
+                                carbon_per_kg = props["Factor (kgCO2e/kg)"]
+
+                                # 1. Calculate relative volume/quantity
+                                total_vol = 0.0
+                                if logic_type == "UHPC_REF_VOL":
+                                    total_vol = qty * total_project_uhpc_volume_m3
+                                elif logic_type == "PERCENT_VOL":
+                                    total_vol = (qty / 100.0) * ref_conc_vol
+                                elif logic_type == "PERCENT_WEIGHT":
+                                    total_vol = (qty / 100.0) * ref_steel_weight
+                                elif logic_type == "PER_UNIT":
+                                    total_vol = qty * c_multiplier
+                                elif logic_type in ["BASIC", "BASIC_LITER"]:
+                                    total_vol = qty
+                                    
+                                # 2. Convert to total mass (kg)
+                                total_mass_kg = 0.0
+                                if logic_type in ["BASIC", "PER_UNIT"] and "tonnes" in unit_str:
+                                    total_mass_kg = total_vol * 1000.0
+                                elif logic_type == "PERCENT_WEIGHT":
+                                    total_mass_kg = total_vol * 1000.0
+                                else:
+                                    if logic_type in ["BASIC_LITER", "UHPC_REF_VOL"]:
+                                        total_vol = total_vol / 1000.0
+                                    total_mass_kg = total_vol * mass_per_m3
                                 
-                                c_materials.append({
-                                    "label": mat.get("label", ""),
-                                    "quantity": qty,
-                                    "unit": mat["unit"],
-                                    "assigned_mix": mix
-                                })
+                                # 3. Calculate Carbon
+                                mat_carbon = total_mass_kg * carbon_per_kg
+                                total_carbon += mat_carbon
                                 
-                            clean_project_data.append({
-                                "component_name": c_name,
-                                "multiplier_count": c_multiplier,
-                                "materials": c_materials
+                            c_materials.append({
+                                "label": mat.get("label", ""),
+                                "quantity": qty,
+                                "unit": unit_str,
+                                "assigned_mix": mix
                             })
-                        
-                        project_payload = {
-                            "user_id": st.session_state.user_id,
-                            "project_name": st.session_state.draft_proj_name,
-                            "structure_type": selected_structure,
-                            "total_embodied_carbon": total_carbon,
-                            "component_data": clean_project_data 
-                        }
-                        
-                        try:
+                                
+                        clean_project_data.append({
+                            "component_name": c_name,
+                            "multiplier_count": c_multiplier,
+                            "materials": c_materials
+                        })
+                    
+                    project_payload = {
+                        "user_id": st.session_state.user_id,
+                        "project_name": st.session_state.draft_proj_name,
+                        "structure_type": selected_structure,
+                        "total_embodied_carbon": total_carbon,
+                        "component_data": clean_project_data 
+                    }
+                    
+                    try:
+                        if st.session_state.get("existing_proj_id"):
+                            supabase.table("saved_projects").update(project_payload).eq("id", st.session_state.existing_proj_id).execute()
+                            st.success(f"Project '{st.session_state.draft_proj_name}' successfully overwritten and updated.")
+                        else:
                             supabase.table("saved_projects").insert(project_payload).execute()
                             st.success(f"Project '{st.session_state.draft_proj_name}' saved successfully to your account.")
-                            st.metric(label="Total Embodied Carbon (kgCO2e)", value=f"{total_carbon:,.2f}")
                             
-                            st.session_state.draft_proj_name = ""
-                            st.session_state.draft_structure = "---"
-                            st.session_state.draft_components = []
-                            
-                        except Exception as e:
-                            st.error(f"Failed to save project. Please check your database connection. Error: {e}")
+                        st.metric(label="Total Embodied Carbon (kgCO2e)", value=f"{total_carbon:,.2f}")
+                        
+                        # Wipe memory and reset state on success
+                        st.session_state.draft_proj_name = ""
+                        st.session_state.draft_structure = "---"
+                        st.session_state.draft_components = []
+                        st.session_state.execute_save = False
+                        st.session_state.existing_proj_id = None
+                        
+                    except Exception as e:
+                        st.error(f"Failed to save project. Please check your database connection. Error: {e}")
+                        st.session_state.execute_save = False
 
     # ---------------------------------------------------------
     # TAB 3: SAVED PROJECTS 
