@@ -216,17 +216,17 @@ def login_page():
     with col2:
         st.markdown("""
         <div style="text-align: center; padding-bottom: 20px;">
-            <h1 style="color: #f8fafc; font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
-            <p style="color: #94a3b8; font-size: 16px;">Please log in to access your structural carbon accounting workspace.</p>
+            <h1 style="font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
+            <p style="font-size: 16px;">Please log in to access your structural carbon accounting workspace.</p>
         </div>
         """, unsafe_allow_html=True)
         
-        email = st.text_input("Corporate Email", key="login_email")
+        email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
         
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-        if st.button("Secure Log In", use_container_width=True):
+        if st.button("Log In", use_container_width=True):
             try:
                 response = supabase.auth.sign_in_with_password({"email": email, "password": password})
                 st.session_state.user_id = response.user.id
@@ -1042,6 +1042,34 @@ def main_application():
                     })
                     st.table(styled_df)
                     
+                    matrix_data = []
+                    for mix_name in selected_for_comp:
+                        if mix_name.startswith("Custom: "):
+                            m_name = mix_name.replace("Custom: ", "")
+                            mx = next((m for m in user_mixes if m['mix_name'] == m_name), None)
+                            if mx:
+                                if mx.get("components"):
+                                    for c, v in mx["components"].items():
+                                        if v > 0: matrix_data.append({"Material": mix_name, "Ingredient": c, "Quantity (kg)": v})
+                                if mx.get("adhoc_materials"):
+                                    for adhoc in mx["adhoc_materials"]:
+                                        matrix_data.append({"Material": mix_name, "Ingredient": adhoc["Material Name"], "Quantity (kg)": adhoc["Quantity"]})
+                        else:
+                            match_df = db["mixes"][db["mixes"]["Mix_Key"] == mix_name] if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else pd.DataFrame()
+                            if not match_df.empty:
+                                mix_row = match_df.iloc[0]
+                                for comp_factor in factors_df.index:
+                                    if comp_factor in mix_row and pd.notna(mix_row[comp_factor]):
+                                        mass = safe_float(mix_row[comp_factor])
+                                        if mass > 0:
+                                            matrix_data.append({"Material": mix_name, "Ingredient": comp_factor, "Quantity (kg)": mass})
+
+                    if matrix_data:
+                        st.markdown("##### Side-by-Side Ingredient Matrix")
+                        df_matrix = pd.DataFrame(matrix_data)
+                        pivot_matrix = df_matrix.pivot_table(index="Ingredient", columns="Material", values="Quantity (kg)", fill_value=0)
+                        st.dataframe(pivot_matrix, use_container_width=True)
+                    
                     st.markdown("<br>", unsafe_allow_html=True)
                     col_csv, col_pdf, _ = st.columns([1, 1, 1.5])
                     
@@ -1076,7 +1104,6 @@ def main_application():
     # TAB 2: PROJECT ASSESSMENT
     # ---------------------------------------------------------
     elif st.session_state.current_page == "Project Assessment":
-
         col_proj_details, col_clear = st.columns([3, 1])
         
         with col_proj_details:
@@ -1475,24 +1502,26 @@ def main_application():
                                 if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
                                     st.session_state[del_key] = True
                                     st.rerun()
-                            else:
-                                st.warning("Are you sure? This cannot be undone.")
-                                y_col, n_col = st.columns(2)
-                                with y_col:
-                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                                    if st.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
-                                        if 'id' in p:
-                                            supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
-                                            st.session_state[del_key] = False
-                                            st.success("Project deleted.")
-                                            time.sleep(1)
-                                            st.rerun()
-                                        else:
-                                            st.error("Missing 'id' column.")
-                                with n_col:
-                                    if st.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
+
+                        # Un-nested Delete Project confirmation
+                        if st.session_state.get(del_key, False):
+                            st.warning("Are you sure? This cannot be undone.")
+                            y_col, n_col = st.columns(2)
+                            with y_col:
+                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                if st.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
+                                    if 'id' in p:
+                                        supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
                                         st.session_state[del_key] = False
+                                        st.success("Project deleted.")
+                                        time.sleep(1)
                                         st.rerun()
+                                    else:
+                                        st.error("Missing 'id' column.")
+                            with n_col:
+                                if st.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
+                                    st.session_state[del_key] = False
+                                    st.rerun()
             else:
                 st.info("No projects saved under your account yet.")
 
@@ -1607,21 +1636,23 @@ def main_application():
                                 if st.button("Delete Mix", key=f"btn_del_init_mix_{m['id']}"):
                                     st.session_state[del_m_key] = True
                                     st.rerun()
-                            else:
-                                st.warning("Are you sure? This cannot be undone.")
-                                y_m_col, n_m_col = st.columns(2)
-                                with y_m_col:
-                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                                    if st.button("Yes, Delete", key=f"btn_del_yes_mix_{m['id']}"):
-                                        supabase.table("user_mixes").delete().eq("id", m['id']).execute()
-                                        st.session_state[del_m_key] = False
-                                        st.success("Mix deleted.")
-                                        time.sleep(1)
-                                        st.rerun()
-                                with n_m_col:
-                                    if st.button("Cancel", key=f"btn_del_no_mix_{m['id']}"):
-                                        st.session_state[del_m_key] = False
-                                        st.rerun()
+
+                        # Un-nested Delete Mix confirmation
+                        if st.session_state.get(del_m_key, False):
+                            st.warning("Are you sure? This cannot be undone.")
+                            y_m_col, n_m_col = st.columns(2)
+                            with y_m_col:
+                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                if st.button("Yes, Delete", key=f"btn_del_yes_mix_{m['id']}"):
+                                    supabase.table("user_mixes").delete().eq("id", m['id']).execute()
+                                    st.session_state[del_m_key] = False
+                                    st.success("Mix deleted.")
+                                    time.sleep(1)
+                                    st.rerun()
+                            with n_m_col:
+                                if st.button("Cancel", key=f"btn_del_no_mix_{m['id']}"):
+                                    st.session_state[del_m_key] = False
+                                    st.rerun()
 
 if st.session_state.user_id is None:
     login_page()
