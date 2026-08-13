@@ -259,7 +259,8 @@ def wipe_project_form_memory():
 
 def wipe_mix_form_memory():
     """Deletes memory keys to forcefully clear out inputs for the Materials & Mixes tab."""
-    keys_to_clear = ["mix_name_input", "cust_cat", "adhoc_editor", "std_density", "std_gwp", "unit_mode_radio"]
+    # Included the exact widget keys for the Category Dropdown and Category Text Box so they properly clear
+    keys_to_clear = ["mix_name_input", "cust_cat_dropdown", "cust_cat_new", "adhoc_editor", "std_density", "std_gwp", "unit_mode_radio"]
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
@@ -652,10 +653,10 @@ def main_application():
         try:
             if st.session_state.get("existing_mix_id"):
                 supabase.table("user_mixes").update(payload).eq("id", st.session_state.existing_mix_id).execute()
-                st.success(f"Mix '{payload['mix_name']}' successfully overwritten! Clearing form...")
+                msg = f"Mix '{payload['mix_name']}' successfully overwritten!"
             else:
                 supabase.table("user_mixes").insert(payload).execute()
-                st.success(f"'{payload['mix_name']}' saved successfully. Clearing form...")
+                msg = f"Custom item '{payload['mix_name']}' saved successfully!"
             
             # Wipe drafts and wipe form widget memory so the next mix is blank
             if "draft_mix_name" in st.session_state: del st.session_state.draft_mix_name
@@ -665,7 +666,8 @@ def main_application():
                 
             st.session_state.execute_mix_save = False
             st.session_state.existing_mix_id = None
-            time.sleep(1.5)
+            # Save the success message to be shown after the instant refresh
+            st.session_state.mix_success_message = msg
             st.rerun()
         except Exception as e:
             st.error(f"Database Save Error: Details: {e}")
@@ -682,15 +684,15 @@ def main_application():
         try:
             if st.session_state.get("existing_proj_id"):
                 supabase.table("saved_projects").update(project_payload).eq("id", st.session_state.existing_proj_id).execute()
-                st.success(f"Project '{st.session_state.draft_proj_name}' successfully overwritten and updated. Clearing board...")
+                msg = f"Project '{st.session_state.draft_proj_name}' successfully overwritten and updated!"
             else:
                 supabase.table("saved_projects").insert(project_payload).execute()
-                st.success(f"Project '{st.session_state.draft_proj_name}' saved successfully to your account. Clearing board...")
+                msg = f"Project '{st.session_state.draft_proj_name}' saved successfully to your account!"
                 
             # Wipe drafts and form widgets so the next project is blank
             st.session_state.execute_save = False
             st.session_state.existing_proj_id = None
-            time.sleep(1.5)
+            
             st.session_state.draft_proj_name = ""
             st.session_state.draft_structure = "---"
             st.session_state.draft_components = []
@@ -698,6 +700,9 @@ def main_application():
             st.session_state.project_totals = None
             st.session_state.project_clean_data = []
             wipe_project_form_memory()
+            
+            # Save the success message to be shown after the instant refresh
+            st.session_state.proj_success_message = msg
             st.rerun()
         except Exception as e:
             st.error(f"Failed to save project. Error: {e}")
@@ -833,6 +838,11 @@ def main_application():
         # --- SUB-TAB: CREATE CUSTOM MATERIAL ---
         elif mode == "Create Custom Material / Mix":
             st.markdown("#### Design a Custom Material or Mix")
+            
+            # Draw the green success box if they just successfully saved an item!
+            if st.session_state.get("mix_success_message"):
+                st.success(st.session_state.mix_success_message)
+                st.session_state.mix_success_message = None # Delete it immediately so it doesn't get stuck on screen forever
             
             d_name = st.session_state.get("draft_mix_name", "")
             d_cat = st.session_state.get("draft_mix_cat", "--- Select Category ---")
@@ -1194,6 +1204,11 @@ def main_application():
     # TAB 2: PROJECT ASSESSMENT
     # ---------------------------------------------------------
     elif st.session_state.current_page == "Project Assessment":
+        
+        # Draw the green success box if they just successfully saved a project!
+        if st.session_state.get("proj_success_message"):
+            st.success(st.session_state.proj_success_message)
+            st.session_state.proj_success_message = None # Delete it immediately so it doesn't get stuck on screen forever
 
         col_proj_details, col_clear = st.columns([3, 1])
         
