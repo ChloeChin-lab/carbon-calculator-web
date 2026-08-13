@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 import json
 import uuid
+import os
 
 # Silent import for FPDF - won't crash if not installed
 try:
@@ -57,21 +58,23 @@ st.markdown("""
 
 @st.cache_resource
 def init_supabase():
-    # Replace with your actual Supabase URL and Key
-    SUPABASE_URL = "YOUR_SUPABASE_URL"
-    SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
-    try:
-        # Fallback to secrets if available
-        SUPABASE_URL = st.secrets["SUPABASE_URL"]
-        SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-    except:
-        pass
+    # 1. Try fetching from Environment Variables (Render, Heroku, etc.)
+    SUPABASE_URL = os.environ.get("SUPABASE_URL")
+    SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
     
-    if SUPABASE_URL == "YOUR_SUPABASE_URL":
-        # Return a dummy client if not configured yet (prevents crashing during setup)
+    # 2. Try fetching from Streamlit Secrets (Local testing)
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        try:
+            SUPABASE_URL = st.secrets["SUPABASE_URL"]
+            SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+        except Exception:
+            pass
+            
+    # 3. Fallback dummy client if neither is found (prevents crash on boot)
+    if not SUPABASE_URL or not SUPABASE_KEY or SUPABASE_URL == "YOUR_SUPABASE_URL":
         class DummySupabase:
             def auth(self): return self
-            def sign_in_with_password(self, *args, **kwargs): raise Exception("Supabase not configured")
+            def sign_in_with_password(self, *args, **kwargs): raise Exception("Database credentials missing. Please configure Supabase URL and Key.")
         return DummySupabase()
         
     return create_client(SUPABASE_URL, SUPABASE_KEY)
