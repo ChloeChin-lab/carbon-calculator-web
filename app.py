@@ -136,10 +136,10 @@ def generate_pdf_report(df, best, worst, savings):
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 8, "Executive Summary", ln=True)
         pdf.set_font("Arial", '', 11)
-        summary = (f"This comparative analysis evaluates the Global Warming Potential (GWP100) across selected materials. "
+        summary = (f"This comparative analysis evaluates the Embodied Carbon Intensity (ECI) across selected materials. "
                    f"Choosing the optimal material ({best['Material']}) instead of the highest-impact option ({worst['Material']}) "
                    f"results in a {savings:.1f}% reduction in environmental impact per cubic metre. "
-                   f"For large-scale infrastructure applications, this material substitution represents a highly effective sustainability strategy.")
+                   f"For large-scale infrastructure applications, this material substitution represents a highly effective decarbonisation strategy.")
         pdf.multi_cell(0, 6, summary)
         pdf.ln(10)
         
@@ -504,7 +504,7 @@ def welcome_dashboard():
             <p style="color: #5D6D7E; font-size: 14px;">The master library. Configure ingredients, build custom mixes, and compare properties.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-        if st.button("Access Library", key="btn_nav_mats", use_container_width=True):
+        if st.button("Access", key="btn_nav_mats", use_container_width=True):
             st.session_state.current_page = "Materials & Mixes"
             st.rerun()
         
@@ -515,7 +515,7 @@ def welcome_dashboard():
             <p style="color: #5D6D7E; font-size: 14px;">The structural assembly. Configure components, assign materials, and generate assessments.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-        if st.button("Start Assessment", key="btn_nav_proj", use_container_width=True):
+        if st.button("Access", key="btn_nav_proj", use_container_width=True):
             st.session_state.current_page = "Project Assessment"
             st.rerun()
         
@@ -655,15 +655,14 @@ def main_application():
             
             st.markdown("---")
             creation_type = st.radio("What type of item are you creating?", 
-                                     ["Multi-Ingredient Mix (e.g., Concrete, Asphalt)", "Standalone Material (e.g., Steel, Timber, Polymer)"],
+                                     ["Multi-Ingredient Mix (e.g., Concrete)", "Standalone Material (e.g., Steel, Timber)"],
                                      horizontal=True, key="creation_type_radio")
             
             custom_mix_data = {}
             valid_adhoc = []
             
-            if creation_type == "Standalone Material (e.g., Steel, Timber, Polymer)":
+            if creation_type == "Standalone Material (e.g., Steel, Timber)":
                 st.markdown("##### Define Material Properties")
-                st.info("Enter the baseline density and GWP100 factor for this new standalone material.")
                 
                 s_col1, s_col2 = st.columns(2)
                 with s_col1:
@@ -788,7 +787,7 @@ def main_application():
                 r_col2.metric("GWP100 Factor", f"{(total_gwp / total_mass):,.3f} kgCO2e/kg" if total_mass > 0 else "0")
                 r_col3.metric("GWP100 Total", f"{total_gwp:,.2f} kgCO2e/m³")
                 
-                if creation_type == "Multi-Ingredient Mix (e.g., Concrete, Asphalt)":
+                if creation_type == "Multi-Ingredient Mix (e.g., Concrete)":
                     st.markdown("##### Mix Breakdown Analysis")
                     c_pc_col1, c_pc_col2 = st.columns(2)
                     
@@ -917,18 +916,18 @@ def main_application():
                     <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-left: 6px solid #1ABC9C; margin-bottom: 20px;">
                         <h4 style="margin-top: 0; color: #2C3E50;">Executive Summary & Technical Insight</h4>
                         <p style="font-size: 16px; color: #34495E; line-height: 1.6;">
-                        This comparative analysis evaluates the <strong>Global Warming Potential (GWP100)</strong> across your selected structural materials. 
+                        This comparative analysis evaluates the <strong>Embodied Carbon Intensity (ECI)</strong> across your selected structural materials. 
                         Based on the dataset, <strong>{best['Material']}</strong> demonstrates optimal environmental performance, 
-                        yielding an impact of <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong> at a density of <strong>{best['Total Mass (kg/m³)']:,.2f} kg/m³</strong>.
+                        yielding a Global Warming Potential (GWP100) of <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong> at a density of <strong>{best['Total Mass (kg/m³)']:,.2f} kg/m³</strong>.
                         <br><br>
                         Choosing the optimal material (<strong>{best['Material']}</strong>) instead of the highest-impact option (<strong>{worst['Material']}</strong>) results in a 
-                        <strong>{savings_pct:.1f}% reduction</strong> in environmental impact per cubic metre. For large-scale infrastructure applications, this material substitution represents a highly effective sustainability strategy.
+                        <strong>{savings_pct:.1f}% reduction</strong> in environmental impact per cubic metre. For large-scale infrastructure applications, this material substitution represents a highly effective decarbonisation strategy.
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
             
                     st.markdown("##### Visual Analytics")
-                    tab_bar, tab_scatter = st.tabs(["GWP100 Leaderboard", "Density vs. GWP100 Trade-off"])
+                    tab_bar, tab_scatter = st.tabs(["GWP100 Leaderboard", "Density vs. Carbon Trade-off"])
                     
                     with tab_bar:
                         best_val = float(best['Total GWP100 (kgCO2e/m³)']) 
@@ -1445,7 +1444,7 @@ def main_application():
                                     st.rerun()
                         else:
                             st.warning("Are you sure? This cannot be undone.")
-                            y_col, n_col, _ = st.columns([1, 1, 3])
+                            y_col, n_col = st.columns(2)
                             with y_col:
                                 st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
                                 if st.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
@@ -1534,7 +1533,7 @@ def main_application():
                                 st.altair_chart(pie_mass, use_container_width=True)
                                 
                             with pc_col2:
-                                st.markdown("**By GWP100 Impact**")
+                                st.markdown("**By GWP100 Carbon**")
                                 chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
                                 pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
                                     theta=alt.Theta(field="Carbon", type="quantitative"),
@@ -1578,7 +1577,7 @@ def main_application():
                                     st.rerun()
                         else:
                             st.warning("Are you sure? This cannot be undone.")
-                            y_m_col, n_m_col, _ = st.columns([1, 1, 3])
+                            y_m_col, n_m_col = st.columns(2)
                             with y_m_col:
                                 st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
                                 if st.button("Yes, Delete", key=f"btn_del_yes_mix_{m['id']}"):
