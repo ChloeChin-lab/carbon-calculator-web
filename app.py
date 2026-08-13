@@ -6,7 +6,6 @@ import requests
 from io import BytesIO
 import altair as alt
 import uuid
-import time
 
 # Try to load FPDF for PDF generation. If it is not installed, the app won't crash.
 try:
@@ -255,29 +254,31 @@ def wipe_project_form_memory():
     """Forcefully resets all project input widgets to blank so the browser cannot auto-fill old data."""
     st.session_state.draft_proj_name = ""
     for key in list(st.session_state.keys()):
-        # If the key belongs to a dynamically generated component, completely delete it
+        # If the key belongs to a dynamically generated component, completely delete it from memory
         if key.startswith("count_") or key.startswith("name_") or key.startswith("mix_") or key.startswith("qty_") or key.startswith("unit_") or key.startswith("ref_") or key.startswith("mult_") or key.startswith("label_"):
             del st.session_state[key]
 
 def wipe_mix_form_memory():
-    """Forcefully resets all text boxes and numbers in the Custom Mix tab to blank/zero."""
-    st.session_state.mix_name_input = ""
-    st.session_state.cust_cat_dropdown = "--- Select Category ---"
-    st.session_state.cust_cat_new = ""
-    st.session_state.std_density = 7850.0
-    st.session_state.std_gwp = 1.50
-    st.session_state.unit_mode_radio = "Standard (kg/m³)"
-    st.session_state.creation_type_radio = "Multi-Ingredient Mix"
-    
-    if "mix_batch_vol" in st.session_state:
-        st.session_state.mix_batch_vol = 1.0
-        
-    st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
-    
-    # Reset every standard ingredient input box back to 0.0
+    """Forcefully deletes widget memory so Streamlit loads default blank values cleanly without throwing warnings."""
+    # List of all the permanent text boxes and radio buttons on the mix page
+    keys_to_delete = [
+        "mix_name_input", "cust_cat_dropdown", "cust_cat_new",
+        "std_density", "std_gwp", "unit_mode_radio", 
+        "creation_type_radio", "mix_batch_vol",
+        "adhoc_editor"
+    ]
+    # Delete them from memory
+    for k in keys_to_delete:
+        if k in st.session_state:
+            del st.session_state[k]
+            
+    # Reset every standard ingredient input box by deleting its key
     for key in list(st.session_state.keys()):
         if key.startswith("cust_comp_"):
-            st.session_state[key] = 0.0
+            del st.session_state[key]
+            
+    # Re-initialize the custom ingredients table to be perfectly blank
+    st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
 
 def load_project_to_session(p_data, db):
     """Loads a saved project from My Library safely into the Project Assessment tab for editing."""
@@ -364,8 +365,6 @@ def load_mix_to_session(m_data):
     adhoc_list = m_data.get("adhoc_materials", [])
     if adhoc_list:
         st.session_state.adhoc_mats = pd.DataFrame(adhoc_list)
-    else:
-        st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
 
 def get_unit_logic_type(unit_string):
     """Reads the dropdown unit text (e.g. '% by weight') and returns a strict logic code for the math engine."""
@@ -676,10 +675,12 @@ def main_application():
             st.session_state.execute_mix_save = False
             st.session_state.existing_mix_id = None
             
-            # Aggressively wipe drafts and form widget memory so the next mix is perfectly blank
+            # Aggressively wipe drafts so the next mix is perfectly blank
             if "draft_mix_name" in st.session_state: del st.session_state.draft_mix_name
             if "draft_mix_cat" in st.session_state: del st.session_state.draft_mix_cat
             if "draft_mix_comps" in st.session_state: del st.session_state.draft_mix_comps
+            
+            # Wipe memory completely to prevent Streamlit from pasting old numbers
             wipe_mix_form_memory()
             st.rerun()
         except Exception as e:
@@ -857,21 +858,27 @@ def main_application():
                 st.success(st.session_state.mix_success_message)
                 st.session_state.mix_success_message = None # Delete it immediately so it doesn't get stuck on screen forever
             
+            # Safely fetch any draft states before drawing widgets
             d_name = st.session_state.get("draft_mix_name", "")
-            d_cat = st.session_state.get("draft_mix_cat", "--- Select Category ---")
+            custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key="mix_name_input")
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
-                # Add ability for users to dynamically create new categorisation folders
                 cat_options = ["--- Select Category ---", "➕ Create New Category..."] + all_categories
-                custom_cat_selection = st.selectbox("Assign to Category:", cat_options, key="cust_cat_dropdown")
+                d_cat = st.session_state.get("draft_mix_cat", "--- Select Category ---")
+                d_cat_idx = cat_options.index(d_cat) if d_cat in cat_options else 0
+                
+                # By avoiding setting session state manually, Streamlit accepts the `index` argument cleanly!
+                custom_cat_selection = st.selectbox("Assign to Category:", cat_options, index=d_cat_idx, key="cust_cat_dropdown")
+                
                 if custom_cat_selection == "➕ Create New Category...":
                     custom_cat = st.text_input("Enter New Category Name:", key="cust_cat_new")
                 else:
                     custom_cat = custom_cat_selection
             with c_col2:
-                custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key="mix_name_input")
-            
+                # Left empty to balance layout
+                pass
+                
             st.markdown("---")
             # Explicit engineering terms requested by the user
             creation_type = st.radio("What type of item are you creating?", 
@@ -930,6 +937,7 @@ def main_application():
                 input_cols = st.columns(4)
                 for i, comp in enumerate(all_comps):
                     default_val = float(d_comps.get(comp, 0.0))
+                    # Safely pass value=default_val because we deleted the key during the wipe!
                     val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, value=default_val, key=f"cust_comp_{comp}")
                     if val > 0:
                         raw_input_data[comp] = val
@@ -1165,7 +1173,6 @@ def main_application():
                         
                     with tab_scatter:
                         scatter = alt.Chart(comp_df).mark_circle(size=200).encode(
-                            # Title changed strictly to Density
                             x=alt.X("Total Mass (kg/m³):Q", title="Density (kg/m³)", scale=alt.Scale(zero=False, padding=20)),
                             y=alt.Y("Total GWP100 (kgCO2e/m³):Q", title="Total GWP100 (kgCO2e/m³)", scale=alt.Scale(zero=False, padding=20)),
                             color=alt.Color("Material:N", legend=alt.Legend(title="Material")),
@@ -1467,7 +1474,7 @@ def main_application():
                         projects_res = supabase.table("saved_projects").select("id, project_name").eq("user_id", st.session_state.user_id).execute()
                         local_user_projects = projects_res.data if projects_res.data else []
                         
-                        # Bulletproof duplicate check for projects
+                        # Bulletproof case-insensitive duplicate check for projects
                         clean_new_name = st.session_state.draft_proj_name.strip().lower()
                         existing_project = next((p for p in local_user_projects if p['project_name'].strip().lower() == clean_new_name), None)
                         
@@ -1588,7 +1595,6 @@ def main_application():
                                     try:
                                         supabase.table("saved_projects").update({"project_name": new_p_name}).eq("id", proj_id).execute()
                                         st.success("Project renamed!")
-                                        time.sleep(1)
                                         st.rerun()
                                     except Exception as e:
                                         st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
@@ -1614,7 +1620,6 @@ def main_application():
                                         supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
                                         st.session_state[del_key] = False
                                         st.success("Project deleted.")
-                                        time.sleep(1)
                                         st.rerun()
                                     else:
                                         st.error("Missing 'id' column.")
@@ -1728,7 +1733,6 @@ def main_application():
                                     try:
                                         supabase.table("user_mixes").update({"mix_name": new_m_name}).eq("id", m['id']).execute()
                                         st.success("Mix renamed successfully!")
-                                        time.sleep(1)
                                         st.rerun()
                                     except Exception as e:
                                         st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
@@ -1753,7 +1757,6 @@ def main_application():
                                     supabase.table("user_mixes").delete().eq("id", m['id']).execute()
                                     st.session_state[del_m_key] = False
                                     st.success("Mix deleted.")
-                                    time.sleep(1)
                                     st.rerun()
                             with n_m_col:
                                 if st.button("Cancel", key=f"btn_del_no_mix_{m['id']}"):
