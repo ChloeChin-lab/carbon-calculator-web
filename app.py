@@ -612,28 +612,22 @@ def main_application():
     # ---------------------------------------------------------
     if st.session_state.current_page == "Materials & Mixes":
         
-        # --- EXECUTE MIX SAVE (MOVED TO TOP) ---
+        # --- STREAMING_CHUNK:Executing custom mix database save ---
         # By placing this at the top, we wipe the form's memory BEFORE it draws on the screen!
         if st.session_state.get("execute_mix_save"):
             payload = st.session_state.mix_payload_draft
             try:
                 if st.session_state.get("existing_mix_id"):
                     supabase.table("user_mixes").update(payload).eq("id", st.session_state.existing_mix_id).execute()
-                    st.success(f"Mix '{payload['mix_name']}' successfully overwritten! Redirecting...")
+                    st.success(f"Mix '{payload['mix_name']}' successfully overwritten! Clearing form...")
                 else:
                     supabase.table("user_mixes").insert(payload).execute()
-                    st.success(f"'{payload['mix_name']}' saved successfully. Redirecting...")
-                
-                # Instantly reset the background tracker back to "View" mode
-                st.session_state.mix_mode_radio = "View Standard Materials"
-                
-                # Tell Streamlit to delete the UI radio button's memory key
-                if "mix_mode_radio_ui" in st.session_state:
-                    del st.session_state["mix_mode_radio_ui"]
+                    st.success(f"'{payload['mix_name']}' saved successfully. Clearing form...")
                     
-                # Tell Streamlit to aggressively delete every text box memory key
+                # Tell Streamlit to aggressively delete every text box memory key so the form blanks out
                 keys_to_clear = ["mix_name_input", "cust_cat", "cust_cat_new", "batch_vol_input", 
-                                 "draft_mix_name", "draft_mix_cat", "draft_mix_comps", "adhoc_editor"]
+                                 "draft_mix_name", "draft_mix_cat", "draft_mix_comps", "adhoc_editor",
+                                 "std_density", "std_gwp", "unit_mode_radio"]
                 for k in keys_to_clear:
                     if k in st.session_state:
                         del st.session_state[k]
@@ -800,14 +794,14 @@ def main_application():
             
             st.markdown("---")
             creation_type = st.radio("What type of item are you creating?", 
-                                     ["Concrete", "Steel, Timber"],
+                                     ["Multi-Ingredient Mix", "Standalone Material"],
                                      horizontal=True)
             
             custom_mix_data = {}
             valid_adhoc = []
             
             # --- STANDALONE MATERIAL ---
-            if creation_type == "Steel, Timber":
+            if creation_type == "Standalone Material":
                 st.markdown("##### Define Material Properties")
                 
                 s_col1, s_col2 = st.columns(2)
@@ -935,7 +929,7 @@ def main_application():
                 r_col2.metric("GWP100 Factor", f"{(total_gwp / total_mass):,.3f} kgCO2e/kg" if total_mass > 0 else "0")
                 r_col3.metric("GWP100 Total", f"{total_gwp:,.2f} kgCO2e/m³")
                 
-                if creation_type == "Concrete":
+                if creation_type == "Multi-Ingredient Mix":
                     st.markdown("##### Mix Breakdown Analysis")
                     c_pc_col1, c_pc_col2 = st.columns(2)
                     
