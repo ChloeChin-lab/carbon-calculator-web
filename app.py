@@ -265,7 +265,7 @@ def wipe_mix_form_memory():
         "mix_name_input", "cust_cat_dropdown", "cust_cat_new",
         "std_density", "std_gwp", "unit_mode_radio", 
         "creation_type_radio", "mix_batch_vol",
-        "adhoc_editor"
+        "adhoc_editor", "show_mix_preview"
     ]
     # Delete them from memory
     for k in keys_to_delete:
@@ -851,7 +851,29 @@ def main_application():
 
         # --- SUB-TAB: CREATE CUSTOM MATERIAL ---
         elif mode == "Create Custom Material / Mix":
-            st.markdown("#### Design a Custom Material or Mix")
+            col_mix_header, col_mix_clear = st.columns([3, 1])
+            with col_mix_header:
+                st.markdown("#### Design a Custom Material or Mix")
+                
+            with col_mix_clear:
+                # Add the exact same Clear Form functionality from Project Assessment
+                if not st.session_state.get("confirm_clear_mix", False):
+                    if st.button("Clear Form & Start Over", key="btn_clear_mix_init"):
+                        st.session_state.confirm_clear_mix = True
+                        st.rerun()
+                else:
+                    st.error("Are you sure? Unsaved changes will be lost.")
+                    col_y, col_n = st.columns(2)
+                    with col_y:
+                        st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                        if st.button("Yes, Clear", key="btn_mix_clear_yes"):
+                            st.session_state.confirm_clear_mix = False
+                            wipe_mix_form_memory()
+                            st.rerun()
+                    with col_n:
+                        if st.button("Cancel", key="btn_mix_clear_no"):
+                            st.session_state.confirm_clear_mix = False
+                            st.rerun()
             
             # Draw the green success box if they just successfully saved an item!
             if st.session_state.get("mix_success_message"):
@@ -902,13 +924,9 @@ def main_application():
                     valid_adhoc = [{"Material Name": custom_mix_name if custom_mix_name else "New Material", "Quantity": standalone_density, "GWP100 (kgCO2e/kg)": standalone_gwp}]
                 
                 st.markdown("---")
-                btn_col1, btn_col2 = st.columns(2)
-                with btn_col1:
-                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-                    preview_mix = st.button("Preview Properties")
-                with btn_col2:
-                    st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
-                    save_mix = st.button("Save Custom Material")
+                st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+                if st.button("Preview Properties", use_container_width=True):
+                    st.session_state.show_mix_preview = True
                     
             else:
                 st.markdown("##### 1. Choose Input Units")
@@ -978,16 +996,12 @@ def main_application():
                         valid_adhoc.append({"Material Name": name, "Quantity": qty, "GWP100 (kgCO2e/kg)": gwp})
 
                 st.markdown("---")
-                btn_col1, btn_col2 = st.columns(2)
-                with btn_col1:
-                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-                    preview_mix = st.button("Preview Mix Properties")
-                with btn_col2:
-                    st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
-                    save_mix = st.button("Save Custom Mix")
+                st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+                if st.button("Preview Mix Properties", use_container_width=True):
+                    st.session_state.show_mix_preview = True
                 
-            # If user hits Preview
-            if preview_mix and (len(custom_mix_data) > 0 or len(valid_adhoc) > 0):
+            # If user has triggered the preview, draw the properties and save button
+            if st.session_state.get("show_mix_preview") and (len(custom_mix_data) > 0 or len(valid_adhoc) > 0):
                 total_mass = 0
                 total_gwp = 0
                 
@@ -1708,43 +1722,43 @@ def main_application():
                                     color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
                                     tooltip=["Component", "Carbon"]
                                 ).properties(height=280)
-                                st.altair_chart(pie_carbon, use_container_width=True)
+                                st.altair_chart(c_pie_carbon, use_container_width=True)
+            
+                st.markdown("---")
+                st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
+                if st.button("Save Custom Item"):
+                    if custom_cat == "--- Select Category ---" or not custom_cat:
+                        st.error("Please assign a category before saving.")
+                    elif not custom_mix_name:
+                        st.error("Please provide a name for your item.")
+                    elif len(custom_mix_data) == 0 and len(valid_adhoc) == 0:
+                        st.error("Please add at least one ingredient or property.")
+                    else:
+                        mix_payload = {
+                            "user_id": st.session_state.user_id,
+                            "mix_name": custom_mix_name.strip(),
+                            "category": custom_cat.strip(),
+                            "components": custom_mix_data,
+                            "adhoc_materials": valid_adhoc
+                        }
                         
-                        st.markdown("##### Ingredient Recipe")
-                        # For standalone materials, matrix handles synthetic rendering
-                        if recipe_data:
-                            st.dataframe(pd.DataFrame(recipe_data), use_container_width=True, hide_index=True)
+                        # Bulletproof case-insensitive and space-stripped duplicate check!
+                        clean_new_name = custom_mix_name.strip().lower()
+                        clean_new_cat = custom_cat.strip().lower()
+                        existing_mix = next((m for m in user_mixes if m['mix_name'].strip().lower() == clean_new_name and m['category'].strip().lower() == clean_new_cat), None)
+                        
+                        if existing_mix:
+                            st.session_state.confirm_overwrite_mix_name = custom_mix_name
+                            st.session_state.existing_mix_id = existing_mix['id']
+                            st.session_state.mix_payload_draft = mix_payload
+                            st.rerun()
                         else:
-                            # Generate a synthetic row for direct materials
-                            synth_recipe = [{"Material": m['mix_name'], "Quantity": props['Mass (kg/m3)'], "Type": "Standalone Direct Material"}]
-                            st.dataframe(pd.DataFrame(synth_recipe), use_container_width=True, hide_index=True)
-                        
-                        st.markdown("---")
-                        
-                        del_m_key = f"del_mix_confirm_{m['id']}"
-                        
-                        # Un-nested layout for Library Mixes
-                        if not st.session_state.get(del_m_key, False):
-                            col_rn, col_dup, col_del = st.columns([1.5, 1, 1])
-                            with col_rn:
-                                new_m_name = st.text_input("Rename Mix:", value=m['mix_name'], key=f"rn_in_{m['id']}")
-                                st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-                                if st.button("Update Name", key=f"rn_btn_{m['id']}"):
-                                    try:
-                                        supabase.table("user_mixes").update({"mix_name": new_m_name}).eq("id", m['id']).execute()
-                                        st.success("Mix renamed successfully!")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
+                            st.session_state.execute_mix_save = True
+                            st.session_state.mix_payload_draft = mix_payload
+                            st.rerun()
                             
-                            with col_dup:
-                                st.markdown("<br>", unsafe_allow_html=True)
-                                st.markdown('<span class="btn-grey"></span>', unsafe_allow_html=True)
-                                st.button("Clone for Editing", key=f"dup_m_{m['id']}", on_click=load_mix_to_session, args=(m,))
-
-                            with col_del:
-                                st.markdown("<br>", unsafe_allow_html=True)
-                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+            # If the duplicate warning triggered, display the red box and wait for user confirmation
+            if st.session_state.get("confirm_overwrite_mix_name"):
                                 if st.button("Delete Mix", key=f"btn_del_init_mix_{m['id']}"):
                                     st.session_state[del_m_key] = True
                                     st.rerun()
