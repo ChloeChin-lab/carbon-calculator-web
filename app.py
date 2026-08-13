@@ -78,16 +78,20 @@ def init_supabase():
 
 supabase = init_supabase()
 
-class PDFReport(FPDF) if HAS_PDF else object:
-    def header(self):
-        self.set_font('Arial', 'B', 15)
-        self.cell(0, 10, 'Sustainability Comparison Report', 0, 1, 'C')
-        self.ln(5)
+if HAS_PDF:
+    class PDFReport(FPDF):
+        def header(self):
+            self.set_font('Arial', 'B', 15)
+            self.cell(0, 10, 'Sustainability Comparison Report', 0, 1, 'C')
+            self.ln(5)
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Arial', 'I', 8)
+            self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+else:
+    class PDFReport:
+        pass
 
 def create_pdf_report(df, best_material, reduction_pct):
     if not HAS_PDF: return None
