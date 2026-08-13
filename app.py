@@ -227,10 +227,11 @@ def login_page():
     col1, col2, col3 = st.columns([1, 1.2, 1])
     
     with col2:
+        # Removed hardcoded white colours so the text adapts to Light/Dark mode automatically
         st.markdown("""
         <div style="text-align: center; padding-bottom: 20px;">
-            <h1 style="color: #f8fafc; font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
-            <p style="color: #94a3b8; font-size: 16px;">Please log in to access.</p>
+            <h1 style="font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
+            <p style="font-size: 16px; opacity: 0.8;">Please log in to access.</p>
         </div>
         """, unsafe_allow_html=True)
         
