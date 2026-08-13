@@ -656,7 +656,7 @@ def main_application():
             st.markdown("---")
             creation_type = st.radio("What type of item are you creating?", 
                                      ["Multi-Ingredient Mix (e.g., Concrete, Asphalt)", "Standalone Material (e.g., Steel, Timber, Polymer)"],
-                                     horizontal=True)
+                                     horizontal=True, key="creation_type_radio")
             
             custom_mix_data = {}
             valid_adhoc = []
@@ -667,9 +667,9 @@ def main_application():
                 
                 s_col1, s_col2 = st.columns(2)
                 with s_col1:
-                    standalone_density = st.number_input("Density / Unit Weight (kg/m³)", min_value=0.1, value=7850.0, step=10.0)
+                    standalone_density = st.number_input("Density / Unit Weight (kg/m³)", min_value=0.1, value=7850.0, step=10.0, key="std_density")
                 with s_col2:
-                    standalone_gwp = st.number_input("GWP100 (kgCO2e/kg)", min_value=0.0, value=1.50, step=0.01, format="%.3f")
+                    standalone_gwp = st.number_input("GWP100 (kgCO2e/kg)", min_value=0.0, value=1.50, step=0.01, format="%.3f", key="std_gwp")
                 
                 if standalone_density > 0:
                     valid_adhoc = [{"Material Name": custom_mix_name if custom_mix_name else "New Material", "Quantity": standalone_density, "GWP100 (kgCO2e/kg)": standalone_gwp}]
@@ -687,11 +687,11 @@ def main_application():
                 st.markdown("##### 1. Choose Input Units")
                 unit_mode = st.radio("How are you inputting your mix ingredients?", 
                                      ["Standard (kg/m³)", "Total Batch Weight (kg)", "US Imperial (lb/yd³)"], 
-                                     horizontal=True)
+                                     horizontal=True, key="unit_mode_radio")
                 
                 batch_vol = 1.0
                 if unit_mode == "Total Batch Weight (kg)":
-                    batch_vol = st.number_input("What is the total batch volume? (m³):", min_value=0.1, value=1.0, step=0.1)
+                    batch_vol = st.number_input("What is the total batch volume? (m³):", min_value=0.1, value=1.0, step=0.1, key="batch_vol_input")
                     st.info(f"Your inputs will be automatically divided by {batch_vol} to standardise them to kg/m³.")
                 elif unit_mode == "US Imperial (lb/yd³)":
                     st.info("Your inputs will be automatically converted to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
@@ -867,8 +867,10 @@ def main_application():
                     if "draft_mix_name" in st.session_state: del st.session_state.draft_mix_name
                     if "draft_mix_cat" in st.session_state: del st.session_state.draft_mix_cat
                     if "draft_mix_comps" in st.session_state: del st.session_state.draft_mix_comps
+                    
+                    keys_to_clear = ["mix_name_input", "cust_cat_sel", "cust_cat_new_input", "adhoc_mats", "adhoc_editor", "creation_type_radio", "std_density", "std_gwp", "unit_mode_radio", "batch_vol_input"]
                     for key in list(st.session_state.keys()):
-                        if key.startswith("cust_comp_") or key in ["mix_name_input", "cust_cat_sel", "cust_cat_new_input", "adhoc_mats"]:
+                        if key.startswith("cust_comp_") or key in keys_to_clear:
                             del st.session_state[key]
                             
                     st.session_state.execute_mix_save = False
@@ -1031,7 +1033,7 @@ def main_application():
                                 use_container_width=True
                             )
                 else:
-                    st.info("💡 Please select at least one more material from the dropdown above to generate the side-by-side comparison report and visual charts.")
+                    st.info("Please select at least one more material from the dropdown above to generate the side-by-side comparison report and visual charts.")
                     st.dataframe(comp_df.set_index("Material").style.format({
                         "Total Mass (kg/m³)": "{:,.2f}",
                         "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
