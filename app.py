@@ -113,6 +113,12 @@ if "current_page" not in st.session_state:
 if "mix_mode_radio" not in st.session_state:
     st.session_state.mix_mode_radio = "View Standard Materials"
 
+# RESET COUNTERS: The secret to flawless form clearing!
+if "mix_reset_counter" not in st.session_state:
+    st.session_state.mix_reset_counter = 0
+if "project_reset_counter" not in st.session_state:
+    st.session_state.project_reset_counter = 0
+
 # Background memory specifically for the Project Assessment tab so it doesn't wipe when you click away
 if "draft_proj_name" not in st.session_state:
     st.session_state.draft_proj_name = ""
@@ -220,63 +226,29 @@ def load_database():
             
     return None
 
-def login_page():
-    """Draws the secure login screen for the application. Removed hardcoded white text so it adapts to Light Mode."""
-    st.markdown("<br><br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-    
-    with col2:
-        st.markdown("""
-        <div style="text-align: center; padding-bottom: 20px;">
-            <h1 style="font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
-            <p style="font-size: 16px; opacity: 0.8;">Please log in to access.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-        if st.button("Secure Log In", use_container_width=True):
-            try:
-                # Attempt to log in with Supabase Authentication
-                response = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                st.session_state.user_id = response.user.id
-                st.session_state.user_email = response.user.email
-                st.session_state.current_page = "Home"
-                st.rerun() 
-            except Exception:
-                st.error("Invalid email or password. Please contact your administrator for access.")
-
 def wipe_project_form_memory():
-    """Forcefully deletes dynamic widget keys from memory so the project browser starts blank."""
+    """Forces the Project Assessment form to completely clear by advancing the reset counter."""
+    st.session_state.project_reset_counter += 1
     st.session_state.draft_proj_name = ""
-    for key in list(st.session_state.keys()):
-        if key.startswith("count_") or key.startswith("name_") or key.startswith("mix_") or key.startswith("qty_") or key.startswith("unit_") or key.startswith("ref_") or key.startswith("mult_") or key.startswith("label_"):
-            del st.session_state[key]
+    st.session_state.draft_structure = "---"
+    st.session_state.draft_components = []
+    st.session_state.project_results_df = None
+    st.session_state.project_totals = None
+    st.session_state.project_clean_data = []
 
 def wipe_mix_form_memory():
-    """Explicitly deletes the widget memory keys so Streamlit loads default values cleanly without throwing warnings."""
-    # List of all the permanent text boxes and radio buttons on the mix page
-    keys_to_delete = [
-        "mix_name_input", "cust_cat_dropdown", "cust_cat_new",
-        "std_density", "std_gwp", "unit_mode_radio", 
-        "creation_type_radio", "mix_batch_vol",
-        "adhoc_editor", "show_mix_preview"
-    ]
-    # Delete them from memory so Streamlit defaults to what is written in the code
-    for k in keys_to_delete:
-        if k in st.session_state:
-            del st.session_state[k]
-            
-    # Reset every standard ingredient input box by deleting its key
-    for key in list(st.session_state.keys()):
-        if key.startswith("cust_comp_"):
-            del st.session_state[key]
-            
-    # Re-initialize the custom ingredients table to be perfectly blank
+    """Forces the Custom Mix form to completely clear by advancing the reset counter."""
+    st.session_state.mix_reset_counter += 1
     st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
+    st.session_state.show_mix_preview = False
+    
+    # Also explicitly blank out any saved drafts so they don't reload
+    if "draft_mix_name" in st.session_state:
+        st.session_state.draft_mix_name = ""
+    if "draft_mix_cat" in st.session_state:
+        st.session_state.draft_mix_cat = "--- Select Category ---"
+    if "draft_mix_comps" in st.session_state:
+        st.session_state.draft_mix_comps = {}
 
 def load_project_to_session(p_data, db):
     """Loads a saved project from My Library safely into the Project Assessment tab for editing."""
@@ -285,7 +257,6 @@ def load_project_to_session(p_data, db):
     
     st.session_state.draft_proj_name = f"{p_data['project_name']} (Copy)"
     st.session_state.draft_structure = p_data['structure_type']
-    st.session_state.project_results_df = None 
     
     known_components = []
     if db is not None and not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
@@ -428,34 +399,26 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
     grand_totals = {"mass": 0.0, "gwp": 0.0}
     clean_project_data = []
 
-    # Loop through every single row (component) the user built in the app
     for comp_idx, comp in enumerate(draft_components):
         c_name = comp.get("custom_name", comp.get("base_name", "Unknown"))
         c_multiplier = int(comp.get("count", 1))
         c_materials = []
 
-        # Loop through every material inside that specific component
         for mat in comp.get("materials", []):
             qty = safe_float(mat.get("qty", 0.0))
             unit_str = mat.get("unit", "")
             mix = mat.get("mix", "--- Select ---")
-            
             ref_val = safe_float(mat.get("ref_value", 0.0))
             ref_per_unit = mat.get("ref_per_unit", False)
-            
             logic_type = get_unit_logic_type(unit_str)
             
-            # If they assigned a real material and a quantity greater than zero, run the math
             if mix != "--- Select ---" and qty > 0:
                 props = calculate_mix_carbon(mix, db, user_mixes, factors_df)
                 mass_per_m3 = props["Mass (kg/m3)"]
-                
                 total_mass_kg = 0.0
                 
-                # Complex volumetric math rules based on the specific dropdown unit they chose
                 if logic_type == "PERCENT_VOL" or logic_type == "LITER_PER_M3" or logic_type == "PERCENT_WEIGHT":
                     actual_ref_val = (ref_val * c_multiplier) if ref_per_unit else ref_val
-                    
                     if logic_type == "PERCENT_VOL":
                         vol_m3 = (qty / 100.0) * actual_ref_val
                         total_mass_kg = vol_m3 * mass_per_m3
@@ -465,7 +428,6 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                     elif logic_type == "PERCENT_WEIGHT":
                         weight_tonnes = (qty / 100.0) * actual_ref_val
                         total_mass_kg = weight_tonnes * 1000.0
-                    
                 elif logic_type in ["PER_UNIT", "BASIC", "BASIC_LITER"]:
                     base_vol = qty * c_multiplier if logic_type == "PER_UNIT" else qty
                     if "tonne" in unit_str.lower():
@@ -477,12 +439,9 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                     else:
                         total_mass_kg = base_vol * mass_per_m3
 
-                # Multiply the calculated mass by the carbon factor
                 item_gwp = total_mass_kg * props["Factor_GWP (kgCO2e/kg)"]
-                
                 grand_totals["mass"] += total_mass_kg
                 grand_totals["gwp"] += item_gwp
-                
                 item_label = f"{comp_idx + 1}. {c_name} {mat.get('label', '')}".strip()
                 
                 if logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "LITER_PER_M3"]:
@@ -491,7 +450,6 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 else:
                     display_qty = f"{qty}"
                 
-                # Save the results for the final output table
                 results_list.append({
                     "Item": item_label,
                     "Material": mix,
@@ -501,7 +459,6 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                     "Total GWP100 (kgCO2e)": item_gwp
                 })
                 
-            # Cleanly save the exact structure so it can be uploaded to the database
             c_materials.append({
                 "label": mat.get("label", ""),
                 "quantity": qty,
@@ -531,7 +488,6 @@ def render_results_table_and_totals(df, totals):
     
     st.table(display_df)
     
-    # HTML block to make the Grand Totals look bold and boxed
     totals_html = f"""
     <div style="border: 1px solid #d3d3d3; border-radius: 5px; padding: 20px; background-color: #f9f9f9; margin-bottom: 20px;">
         <h4 style="margin-top: 0; color: #000; font-family: sans-serif;">Project Grand Totals</h4>
@@ -543,9 +499,37 @@ def render_results_table_and_totals(df, totals):
     """
     st.markdown(totals_html, unsafe_allow_html=True)
 
+def login_page():
+    """Draws the secure login screen. The text color is removed so it adapts flawlessly to Light and Dark mode."""
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    
+    with col2:
+        st.markdown("""
+        <div style="text-align: center; padding-bottom: 20px;">
+            <h1 style="font-size: 36px; margin-bottom: 5px;">Sustainability Assessment System</h1>
+            <p style="font-size: 16px; opacity: 0.8;">Please log in to access.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+        if st.button("Secure Log In", use_container_width=True):
+            try:
+                response = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                st.session_state.user_id = response.user.id
+                st.session_state.user_email = response.user.email
+                st.session_state.current_page = "Home"
+                st.rerun() 
+            except Exception:
+                st.error("Invalid email or password. Please contact your administrator for access.")
+
 def welcome_dashboard():
     """Draws the beautiful home screen with the three main feature portals."""
-    username = st.session_state.user_email.split('@')[0].capitalize()
+    username = st.session_state.user_email.split('@')[0].capitalize() if st.session_state.user_email else "User"
     st.markdown(f"""
     <div style="padding: 40px; background: linear-gradient(135deg, #1e293b, #0f172a); border-radius: 12px; margin-bottom: 30px; color: white; border: 1px solid #334155;">
         <h1 style="margin-top: 0; color: white;">Welcome, {username}!</h1>
@@ -590,7 +574,7 @@ def welcome_dashboard():
             st.rerun()
 
 def main_application():
-    """The master router. Determines which page to draw based on user clicks and handles top-level saving."""
+    """The master router. Determines which page to draw and executes top-level database saves to avoid Streamlit state errors."""
     db = load_database()
     
     if db is None:
@@ -612,10 +596,10 @@ def main_application():
 
     st.sidebar.markdown("---")
     
-    # Standard navigation to prevent Streamlit infinite loops
     nav_options = ["Materials & Mixes", "Project Assessment", "My Library"]
     current_idx = nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0
     
+    # Safe navigation without on_change callbacks (Prevents silent blank screen bug)
     selected_nav = st.sidebar.radio("Navigation", nav_options, index=current_idx, label_visibility="collapsed")
     
     if selected_nav != st.session_state.current_page:
@@ -637,16 +621,14 @@ def main_application():
     user_mixes = user_mixes_res.data if user_mixes_res.data else []
     custom_mix_names = [m["mix_name"] for m in user_mixes]
     
-    # Combine standard database mixes with user custom mixes into one master dropdown list
+    # Compile the master dropdowns
     mix_mats = db["mixes"]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
     direct_mats = db["direct"]["Material_Key"].dropna().tolist() if not db["direct"].empty and "Material_Key" in db["direct"].columns else []
     standard_mixes = sorted(list(set(mix_mats + direct_mats)))
     all_available_mixes = standard_mixes + [f"Custom: {name}" for name in custom_mix_names]
     factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
-    # =========================================================================
-    # TOP-LEVEL SAVE EXECUTIONS (Placed here so they can wipe memory BEFORE widgets load!)
-    # =========================================================================
+    # Top-Level Save logic ensures variables wipe BEFORE Streamlit attempts to draw the text boxes
     if st.session_state.get("execute_mix_save") and st.session_state.current_page == "Materials & Mixes":
         payload = st.session_state.mix_payload_draft
         try:
@@ -661,12 +643,7 @@ def main_application():
             st.session_state.execute_mix_save = False
             st.session_state.existing_mix_id = None
             
-            # Aggressively wipe the specific memory state variables
-            if "draft_mix_name" in st.session_state: del st.session_state.draft_mix_name
-            if "draft_mix_cat" in st.session_state: del st.session_state.draft_mix_cat
-            if "draft_mix_comps" in st.session_state: del st.session_state.draft_mix_comps
-            
-            wipe_mix_form_memory()
+            wipe_mix_form_memory() 
             st.rerun()
         except Exception as e:
             st.error(f"Database Save Error: Details: {e}")
@@ -692,12 +669,6 @@ def main_application():
             st.session_state.execute_save = False
             st.session_state.existing_proj_id = None
             
-            st.session_state.draft_proj_name = ""
-            st.session_state.draft_structure = "---"
-            st.session_state.draft_components = []
-            st.session_state.project_results_df = None
-            st.session_state.project_totals = None
-            st.session_state.project_clean_data = []
             wipe_project_form_memory()
             st.rerun()
         except Exception as e:
@@ -768,6 +739,7 @@ def main_application():
                                     total_mass = 0
                                     total_gwp = 0
                                     
+                                    # Extract components for pie chart
                                     for comp in factors_df.index:
                                         if comp in mix_row and pd.notna(mix_row[comp]):
                                             mass = safe_float(mix_row[comp])
@@ -824,13 +796,20 @@ def main_application():
                             st.error(f"Error parsing data. Details: {e}")
 
         elif mode == "Create Custom Material / Mix":
+            
+            # Show instant green success banner if a save just occurred
+            if st.session_state.get("mix_success_message"):
+                st.success(st.session_state.mix_success_message)
+                st.session_state.mix_success_message = None
+            
             col_mix_header, col_mix_clear = st.columns([3, 1])
             with col_mix_header:
                 st.markdown("#### Design a Custom Material or Mix")
                 
             with col_mix_clear:
+                # Clear Form Logic using the rock-solid Reset Counter
                 if not st.session_state.get("confirm_clear_mix", False):
-                    if st.button("Clear Form & Start Over", key="btn_clear_mix_init"):
+                    if st.button("Clear Form & Start Over", key=f"btn_clear_mix_init_{st.session_state.mix_reset_counter}"):
                         st.session_state.confirm_clear_mix = True
                         st.rerun()
                 else:
@@ -838,21 +817,18 @@ def main_application():
                     col_y, col_n = st.columns(2)
                     with col_y:
                         st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                        if st.button("Yes, Clear", key="btn_mix_clear_yes"):
+                        if st.button("Yes, Clear", key=f"btn_mix_clear_yes_{st.session_state.mix_reset_counter}"):
                             st.session_state.confirm_clear_mix = False
                             wipe_mix_form_memory()
                             st.rerun()
                     with col_n:
-                        if st.button("Cancel", key="btn_mix_clear_no"):
+                        if st.button("Cancel", key=f"btn_mix_clear_no_{st.session_state.mix_reset_counter}"):
                             st.session_state.confirm_clear_mix = False
                             st.rerun()
             
-            if st.session_state.get("mix_success_message"):
-                st.success(st.session_state.mix_success_message)
-                st.session_state.mix_success_message = None
-            
+            # Using the Reset Counter to make sure all inputs are fresh
             d_name = st.session_state.get("draft_mix_name", "")
-            custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key="mix_name_input")
+            custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key=f"mix_name_input_{st.session_state.mix_reset_counter}")
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
@@ -860,10 +836,10 @@ def main_application():
                 d_cat = st.session_state.get("draft_mix_cat", "--- Select Category ---")
                 d_cat_idx = cat_options.index(d_cat) if d_cat in cat_options else 0
                 
-                custom_cat_selection = st.selectbox("Assign to Category:", cat_options, index=d_cat_idx, key="cust_cat_dropdown")
+                custom_cat_selection = st.selectbox("Assign to Category:", cat_options, index=d_cat_idx, key=f"cust_cat_dropdown_{st.session_state.mix_reset_counter}")
                 
                 if custom_cat_selection == "➕ Create New Category...":
-                    custom_cat = st.text_input("Enter New Category Name:", key="cust_cat_new")
+                    custom_cat = st.text_input("Enter New Category Name:", key=f"cust_cat_new_{st.session_state.mix_reset_counter}")
                 else:
                     custom_cat = custom_cat_selection
             with c_col2:
@@ -873,7 +849,7 @@ def main_application():
             creation_type = st.radio("What type of item are you creating?", 
                                      ["Multi-Ingredient Mix", "Standalone Material"],
                                      horizontal=True,
-                                     key="creation_type_radio")
+                                     key=f"creation_type_radio_{st.session_state.mix_reset_counter}")
             
             custom_mix_data = {}
             valid_adhoc = []
@@ -883,9 +859,9 @@ def main_application():
                 
                 s_col1, s_col2 = st.columns(2)
                 with s_col1:
-                    standalone_density = st.number_input("Density / Unit Weight (kg/m³)", min_value=0.1, value=7850.0, step=10.0, key="std_density")
+                    standalone_density = st.number_input("Density / Unit Weight (kg/m³)", min_value=0.1, value=7850.0, step=10.0, key=f"std_density_{st.session_state.mix_reset_counter}")
                 with s_col2:
-                    standalone_gwp = st.number_input("GWP100 (kgCO2e/kg)", min_value=0.0, value=1.50, step=0.01, format="%.3f", key="std_gwp")
+                    standalone_gwp = st.number_input("GWP100 (kgCO2e/kg)", min_value=0.0, value=1.50, step=0.01, format="%.3f", key=f"std_gwp_{st.session_state.mix_reset_counter}")
                 
                 if standalone_density > 0:
                     valid_adhoc = [{"Material Name": custom_mix_name if custom_mix_name else "New Material", "Quantity": standalone_density, "GWP100 (kgCO2e/kg)": standalone_gwp}]
@@ -899,11 +875,11 @@ def main_application():
                 st.markdown("##### 1. Choose Input Units")
                 unit_mode = st.radio("How are you inputting your mix ingredients?", 
                                      ["Standard (kg/m³)", "Total Batch Weight (kg)", "US Imperial (lb/yd³)"], 
-                                     horizontal=True, key="unit_mode_radio")
+                                     horizontal=True, key=f"unit_mode_radio_{st.session_state.mix_reset_counter}")
                 
                 batch_vol = 1.0
                 if unit_mode == "Total Batch Weight (kg)":
-                    batch_vol = st.number_input("What is the total batch volume? (m³):", min_value=0.1, value=1.0, step=0.1, key="mix_batch_vol")
+                    batch_vol = st.number_input("What is the total batch volume? (m³):", min_value=0.1, value=1.0, step=0.1, key=f"mix_batch_vol_{st.session_state.mix_reset_counter}")
                     st.info(f"Your inputs will be automatically divided by {batch_vol} to standardise them to kg/m³.")
                 elif unit_mode == "US Imperial (lb/yd³)":
                     st.info("Your inputs will be automatically converted to kg/m³ (1 lb/yd³ ≈ 0.5933 kg/m³).")
@@ -918,7 +894,7 @@ def main_application():
                 input_cols = st.columns(4)
                 for i, comp in enumerate(all_comps):
                     default_val = float(d_comps.get(comp, 0.0))
-                    val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, value=default_val, key=f"cust_comp_{comp}")
+                    val = input_cols[i % 4].number_input(comp, min_value=0.0, step=10.0, value=default_val, key=f"cust_comp_{comp}_{st.session_state.mix_reset_counter}")
                     if val > 0:
                         raw_input_data[comp] = val
                         
@@ -932,7 +908,7 @@ def main_application():
                     st.session_state.adhoc_mats, 
                     num_rows="dynamic", 
                     use_container_width=True,
-                    key="adhoc_editor",
+                    key=f"adhoc_editor_{st.session_state.mix_reset_counter}",
                     column_order=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"]
                 )
                 
@@ -1035,6 +1011,7 @@ def main_application():
                             "adhoc_materials": valid_adhoc
                         }
                         
+                        # Robust Duplicate Checking (ignores spaces and capitals)
                         clean_new_name = custom_mix_name.strip().lower()
                         clean_new_cat = custom_cat.strip().lower()
                         existing_mix = next((m for m in user_mixes if m['mix_name'].strip().lower() == clean_new_name and m['category'].strip().lower() == clean_new_cat), None)
@@ -1121,6 +1098,7 @@ def main_application():
                             y=alt.Y("Material:N", sort="-x", title="")
                         )
                         
+                        # Properly identifies the winner using the cubed symbol!
                         bars = base_chart.mark_bar(cornerRadiusEnd=4, height=40).encode(
                             color=alt.condition(
                                 alt.datum['Total GWP100 (kgCO2e/m³)'] == best_val,
@@ -1181,6 +1159,7 @@ def main_application():
                                             matrix_data.append({"Mix": mix_name, "Ingredient": comp, "Mass (kg)": safe_float(mix_row[comp])})
                                             found_ingredients = True
                                             
+                            # Standalone materials like Steel are treated as 100% pure ingredient
                             if not found_ingredients:
                                 props = calculate_mix_carbon(mix_name, db, user_mixes, factors_df)
                                 matrix_data.append({"Mix": mix_name, "Ingredient": f"{mix_name} (Base Material)", "Mass (kg)": props["Mass (kg/m3)"]})
@@ -1236,6 +1215,7 @@ def main_application():
 
     elif st.session_state.current_page == "Project Assessment":
         
+        # Show instant green success banner if a save just occurred
         if st.session_state.get("proj_success_message"):
             st.success(st.session_state.proj_success_message)
             st.session_state.proj_success_message = None 
@@ -1244,12 +1224,13 @@ def main_application():
         
         with col_proj_details:
             st.markdown("### 1. Project Details & Structure")
-            st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name, placeholder="Enter project name...")
+            # Project reset counter forces blank state!
+            st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name, placeholder="Enter project name...", key=f"proj_name_{st.session_state.project_reset_counter}")
             
         with col_clear:
             st.markdown("<br>", unsafe_allow_html=True)
             if not st.session_state.get("confirm_clear_all", False):
-                if st.button("Clear All & Start Over"):
+                if st.button("Clear All & Start Over", key=f"btn_clear_proj_init_{st.session_state.project_reset_counter}"):
                     st.session_state.confirm_clear_all = True
                     st.rerun()
             else:
@@ -1257,16 +1238,12 @@ def main_application():
                 col_y, col_n = st.columns(2)
                 with col_y:
                     st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                    if st.button("Yes, Clear"):
-                        st.session_state.draft_proj_name = ""
-                        st.session_state.draft_structure = "---"
-                        st.session_state.draft_components = []
-                        st.session_state.project_results_df = None
+                    if st.button("Yes, Clear", key=f"btn_proj_clear_yes_{st.session_state.project_reset_counter}"):
                         st.session_state.confirm_clear_all = False
                         wipe_project_form_memory()
                         st.rerun()
                 with col_n:
-                    if st.button("Cancel"):
+                    if st.button("Cancel", key=f"btn_proj_clear_no_{st.session_state.project_reset_counter}"):
                         st.session_state.confirm_clear_all = False
                         st.rerun()
         
@@ -1279,7 +1256,7 @@ def main_application():
 
         col_struct, col_gen = st.columns([3, 1])
         with col_struct:
-            selected_structure = st.selectbox("Select Project Template:", ["---"] + structure_options, index=struct_index)
+            selected_structure = st.selectbox("Select Project Template:", ["---"] + structure_options, index=struct_index, key=f"proj_template_{st.session_state.project_reset_counter}")
         
         with col_gen:
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1303,6 +1280,7 @@ def main_application():
                                 if val and val.lower() != "nan":
                                     default_unit = val
 
+                        # UUIDs are unique, so deleting the list completely clears these widgets!
                         st.session_state.draft_components.append({
                             "id": str(uuid.uuid4()),
                             "base_name": comp,
