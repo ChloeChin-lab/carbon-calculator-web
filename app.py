@@ -25,7 +25,8 @@ st.set_page_config(page_title="Sustainability Assessment System", layout="wide")
 st.markdown("""
 <style>
 /* Primary Button Default (Blue) */
-div[data-testid="stButton"] > button[kind="primary"] {
+div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="stFormSubmitButton"] > button[kind="primary"] {
     background-color: #3b82f6;
     color: white;
     padding: 10px 20px;
@@ -34,7 +35,8 @@ div[data-testid="stButton"] > button[kind="primary"] {
     border-radius: 6px;
     border: none;
 }
-div[data-testid="stButton"] > button[kind="primary"]:hover {
+div[data-testid="stButton"] > button[kind="primary"]:hover,
+div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover {
     background-color: #2563eb;
 }
 
@@ -152,7 +154,6 @@ def generate_pdf_report(df, best, worst, savings):
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 8, "Executive Summary", ln=True)
         pdf.set_font("Arial", '', 11)
-        # Write the executive summary string using the calculated savings
         summary = (f"This comparative analysis evaluates the Embodied Carbon Intensity (ECI) across selected materials. "
                    f"Choosing the optimal material ({best['Material']}) instead of the highest-impact option ({worst['Material']}) "
                    f"results in a {savings:.1f}% reduction in environmental impact per cubic metre. "
@@ -163,7 +164,6 @@ def generate_pdf_report(df, best, worst, savings):
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 8, "Data Summary", ln=True)
         pdf.set_font("Arial", '', 10)
-        # Loop through every material in the table and print its row
         for _, row in df.iterrows():
             pdf.cell(0, 6, f"- {row['Material']}: Mass: {row['Total Mass (kg/m³)']:.2f} kg/m³ | GWP100: {row['Total GWP100 (kgCO2e/m³)']:.2f} kgCO2e/m³", ln=True)
             
@@ -200,43 +200,66 @@ def _pack_database(xls):
         "structures": g("Project_Structures"),
         "unit_logic": g("Unit_Logic"),
         "direct":     g("Direct_Results"),
-        # --- new service life / durability reference tabs ---
-        "strength_classes":  g("Strength_Classes"),
-        "carbonation_k400":  g("Carbonation_k400"),
-        "location_k1":       g("Location_k1"),
-        "exposure_classes":  g("Exposure_Classes"),
-        "chloride_ctl":      g("Chloride_CTL"),
-        "chloride_dc":       g("Chloride_Dc"),
-        "binder_mapping":    g("Binder_Mapping"),
+        # --- service life / durability reference tabs ---
+        "strength_classes":          g("Strength_Classes"),
+        "carbonation_k400":          g("Carbonation_k400"),
+        "carbonation_k400_defaults": g("Carbonation_k400_Defaults"),
+        "location_k1":               g("Location_k1"),
+        "exposure_classes":          g("Exposure_Classes"),
+        "chloride_ctl":              g("Chloride_CTL"),
+        "chloride_dc":               g("Chloride_Dc"),
+        "binder_mapping":            g("Binder_Mapping"),
     }
 
-@st.cache_data(ttl=600) 
+@st.cache_data(ttl=600, show_spinner="Loading materials database...")
 def load_database():
-    """Pulls the master data from Google Sheets (or a local file if offline)."""
-    # Attempt to load from the live Google Sheet first
-    if SHEET_ID and len(SHEET_ID) > 20: 
+    """Pulls the master data from Google Sheets (or a local file if offline).
+    Always returns a dict; '_source' is None when nothing could be loaded and
+    '_errors' explains exactly why."""
+    errors = []
+
+    if not SHEET_ID:
+        errors.append("The GOOGLE_SHEET_ID environment variable is not set on this server.")
+    elif len(SHEET_ID) <= 20:
+        errors.append("GOOGLE_SHEET_ID is set but looks too short to be a real sheet ID.")
+    else:
         export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
-        try:
-            response = requests.get(export_url, timeout=15)
-            response.raise_for_status()
-            excel_data = BytesIO(response.content)
-            xls = pd.read_excel(excel_data, sheet_name=None)
-            return _pack_database(xls)
-        except Exception as e:
-            print(f"Warning: Cloud Database failed to load. Reason: {e}")
-            pass 
-            
-    # Fallback to local file if Google Sheets fails or is not provided
+        for attempt in (1, 2):
+            try:
+                response = requests.get(export_url, timeout=45)
+                if response.status_code != 200:
+                    errors.append(f"Attempt {attempt}: Google Sheets returned HTTP "
+                                  f"{response.status_code}.")
+                    continue
+                ctype = str(response.headers.get("content-type", "")).lower()
+                if "html" in ctype:
+                    errors.append("Google Sheets returned a sign-in page instead of the file. "
+                                  "The sheet is not shared as 'Anyone with the link – Viewer'.")
+                    break
+                xls = pd.read_excel(BytesIO(response.content), sheet_name=None)
+                data = _pack_database(xls)
+                data["_source"] = "Google Sheets"
+                data["_sheets"] = list(xls.keys())
+                data["_errors"] = errors
+                return data
+            except Exception as e:
+                errors.append(f"Attempt {attempt}: {type(e).__name__}: {e}")
+
     local_path = "materials_database.xlsx"
     if os.path.exists(local_path):
         try:
             xls = pd.read_excel(local_path, sheet_name=None)
-            return _pack_database(xls)
+            data = _pack_database(xls)
+            data["_source"] = "Local file (materials_database.xlsx)"
+            data["_sheets"] = list(xls.keys())
+            data["_errors"] = errors
+            return data
         except Exception as e:
-            print(f"Warning: Local Database failed to load. Reason: {e}")
-            return None
-            
-    return None
+            errors.append(f"Local fallback file failed: {type(e).__name__}: {e}")
+    else:
+        errors.append("No local materials_database.xlsx fallback exists in the repository.")
+
+    return {"_source": None, "_sheets": [], "_errors": errors}
 
 def wipe_project_form_memory():
     """Forces the Project Assessment form to completely clear by advancing the reset counter."""
@@ -247,8 +270,7 @@ def wipe_project_form_memory():
     st.session_state.project_results_df = None
     st.session_state.project_totals = None
     st.session_state.project_clean_data = []
-    # also clear any service life results tied to the old project
-    for k in ("sl_detail", "sl_materials", "sl_table", "sl_sig"):
+    for k in ("sl_detail", "sl_materials", "sl_table", "sl_sig", "sl_alloc"):
         if k in st.session_state:
             st.session_state[k] = None
 
@@ -258,7 +280,6 @@ def wipe_mix_form_memory():
     st.session_state.adhoc_mats = pd.DataFrame(columns=["Material Name", "Quantity", "GWP100 (kgCO2e/kg)"])
     st.session_state.show_mix_preview = False
     
-    # Also explicitly blank out any saved drafts so they don't reload
     if "draft_mix_name" in st.session_state:
         st.session_state.draft_mix_name = ""
     if "draft_mix_cat" in st.session_state:
@@ -281,7 +302,6 @@ def load_project_to_session(p_data, db):
     new_draft = []
     raw_comp_data = p_data.get("component_data", [])
     
-    # Handle legacy saved data formats by converting them to the new nested format
     if isinstance(raw_comp_data, dict):
         converted_list = []
         for c_name, c_details in raw_comp_data.items():
@@ -299,7 +319,6 @@ def load_project_to_session(p_data, db):
             })
         raw_comp_data = converted_list
         
-    # Rebuild the UI structure from the saved database array
     for c_data in raw_comp_data:
         c_name = c_data.get("component_name", "Unknown")
         b_name = c_data.get("base_name") 
@@ -363,11 +382,9 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
     m_mass, m_gwp = 0.0, 0.0
     
     if mix_name.startswith("Custom: "):
-        # Logic for custom mixes designed by the user
         mix_n = mix_name.replace("Custom: ", "")
         match_mix = next((m for m in user_mixes if m["mix_name"] == mix_n), None)
         if match_mix:
-            # Add up standard ingredients
             if match_mix.get("components"):
                 for c_name, c_val in match_mix["components"].items():
                     c_val = safe_float(c_val)
@@ -376,14 +393,12 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                         m_gwp += c_val * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
                     m_mass += c_val
                     
-            # Add up custom ad-hoc ingredients
             if match_mix.get("adhoc_materials"):
                 for adhoc in match_mix["adhoc_materials"]:
                     q = safe_float(adhoc.get("Quantity", 0))
                     m_mass += q
                     m_gwp += q * safe_float(adhoc.get("GWP100 (kgCO2e/kg)", 0))
     else:
-        # Logic for standard database mixes (e.g., Concrete C40)
         match_df = db["mixes"][db["mixes"]["Mix_Key"] == mix_name] if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else pd.DataFrame()
         if not match_df.empty:
             mix_row = match_df.iloc[0]
@@ -394,7 +409,6 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
                     m_mass += val
                     m_gwp += val * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
         else:
-            # Logic for standard database direct materials (e.g., Steel, Timber)
             match_direct = db["direct"][db["direct"]["Material_Key"] == mix_name] if not db["direct"].empty and "Material_Key" in db["direct"].columns else pd.DataFrame()
             if not match_direct.empty:
                 direct_row = match_direct.iloc[0]
@@ -456,7 +470,6 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                         total_mass_kg = base_vol * mass_per_m3
 
                 item_gwp = total_mass_kg * props["Factor_GWP (kgCO2e/kg)"]
-                # Volume is needed by the Service Life / CSEPP engine
                 total_vol_m3 = (total_mass_kg / mass_per_m3) if mass_per_m3 > 0 else 0.0
 
                 grand_totals["mass"] += total_mass_kg
@@ -501,9 +514,8 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
     return results_df, grand_totals, clean_project_data
 
 def render_results_table_and_totals(df, totals):
-    """Draws the standard engineering results table, perfectly formatted with commas and 2 decimal places."""
-    display_df = df.copy()
-    # "Component" is only used internally by the Service Life engine
+    """Draws the standard engineering results table, index starting at 1."""
+    display_df = df.copy().reset_index(drop=True)
     if "Component" in display_df.columns:
         display_df = display_df.drop(columns=["Component"])
     display_df.index = display_df.index + 1 
@@ -517,7 +529,8 @@ def render_results_table_and_totals(df, totals):
     
     vol_row = ""
     if "volume" in totals:
-        vol_row = f'<tr><td style="font-weight: bold; padding: 8px 0;">Total Volume:</td><td>{totals["volume"]:,.3f} m³</td></tr>'
+        vol_row = (f'<tr><td style="font-weight: bold; width: 250px; padding: 8px 0;">'
+                   f'Total Volume:</td><td>{totals["volume"]:,.3f} m³</td></tr>')
 
     totals_html = f"""
     <div style="border: 1px solid #d3d3d3; border-radius: 5px; padding: 20px; background-color: #f9f9f9; margin-bottom: 20px;">
@@ -532,7 +545,7 @@ def render_results_table_and_totals(df, totals):
     st.markdown(totals_html, unsafe_allow_html=True)
 
 def login_page():
-    """Draws the secure login screen. The text color is removed so it adapts flawlessly to Light and Dark mode."""
+    """Draws the secure login screen."""
     st.markdown("<br><br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.2, 1])
     
@@ -559,8 +572,33 @@ def login_page():
             except Exception:
                 st.error("Invalid email or password. Please contact your administrator for access.")
 
+def database_error_screen(db):
+    """Explains exactly why the materials database could not be loaded."""
+    st.error("Cannot load the materials database.")
+    st.markdown("**What the server reported:**")
+    for e in (db.get("_errors") or ["No diagnostic information available."]):
+        st.markdown(f"- {e}")
+    st.markdown("""
+**Most common causes, in order:**
+
+1. **The Google Sheet is not shared publicly.** Open the sheet → Share → General access →
+   *Anyone with the link* → *Viewer*. The app downloads the file anonymously; a sheet
+   restricted to your account returns a sign-in page, not a spreadsheet.
+2. **The `GOOGLE_SHEET_ID` environment variable is missing or wrong on this server.**
+   It is the long code between `/d/` and `/edit` in the sheet URL.
+3. **A slow or blocked request.** Google occasionally rate-limits the export endpoint.
+   Press Retry below; if it works on the second try, this was the cause.
+
+This is **not** a Supabase problem — you are logged in, so Supabase is working. Your Supabase
+free tier is unrelated to the spreadsheet.
+""")
+    if st.button("Retry loading the database", type="primary"):
+        st.cache_data.clear()
+        st.rerun()
+    st.stop()
+
 def welcome_dashboard():
-    """Draws the beautiful home screen with the five main feature portals."""
+    """Draws the home screen with the five main feature portals."""
     username = st.session_state.user_email.split('@')[0].capitalize() if st.session_state.user_email else "User"
     st.markdown(f"""
     <div style="padding: 40px; background: linear-gradient(135deg, #1e293b, #0f172a); border-radius: 12px; margin-bottom: 30px; color: white; border: 1px solid #334155;">
@@ -634,15 +672,25 @@ def welcome_dashboard():
         st.markdown("")
 
 def main_application():
-    """The master router. Determines which page to draw and executes top-level database saves to avoid Streamlit state errors."""
+    """The master router."""
     db = load_database()
     
-    if db is None:
-        st.error("Cannot start the application. Please check the database connection.")
+    if not db or not db.get("_source"):
+        database_error_screen(db or {})
+
+    if db["factors"].empty and db["mixes"].empty and db["direct"].empty:
+        st.error(f"The database loaded from {db['_source']} but contains no material data.")
+        st.caption(f"Worksheets found: {', '.join(db.get('_sheets', [])) or 'none'}")
+        st.caption("Check that the tab names are exactly Component_Factors, Mix_Designs, "
+                   "Project_Structures, Unit_Logic and Direct_Results.")
+        if st.button("Retry loading the database", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
         st.stop()
 
     if st.session_state.current_page == "Home":
         st.sidebar.caption(f"User: {st.session_state.user_email}")
+        st.sidebar.caption(f"Database: {db['_source']}")
         if st.sidebar.button("Log Out"):
             st.session_state.user_id = None
             st.session_state.current_page = "Home"
@@ -660,7 +708,6 @@ def main_application():
                    "Comparison & Analysis", "My Library"]
     current_idx = nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0
     
-    # Safe navigation without on_change callbacks (Prevents silent blank screen bug)
     selected_nav = st.sidebar.radio("Navigation", nav_options, index=current_idx, label_visibility="collapsed")
     
     if selected_nav != st.session_state.current_page:
@@ -669,6 +716,7 @@ def main_application():
     
     st.sidebar.markdown("---")
     st.sidebar.caption(f"User: {st.session_state.user_email}")
+    st.sidebar.caption(f"Database: {db['_source']}")
         
     if st.sidebar.button("Log Out"):
         st.session_state.user_id = None
@@ -677,19 +725,16 @@ def main_application():
 
     st.title(st.session_state.current_page)
         
-    # Fetch user's custom mixes from Supabase
     user_mixes_res = supabase.table("user_mixes").select("*").eq("user_id", st.session_state.user_id).execute()
     user_mixes = user_mixes_res.data if user_mixes_res.data else []
     custom_mix_names = [m["mix_name"] for m in user_mixes]
     
-    # Compile the master dropdowns
     mix_mats = db["mixes"]["Mix_Key"].dropna().tolist() if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else []
     direct_mats = db["direct"]["Material_Key"].dropna().tolist() if not db["direct"].empty and "Material_Key" in db["direct"].columns else []
     standard_mixes = sorted(list(set(mix_mats + direct_mats)))
     all_available_mixes = standard_mixes + [f"Custom: {name}" for name in custom_mix_names]
     factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
-    # Top-Level Save logic ensures variables wipe BEFORE Streamlit attempts to draw the text boxes
     if st.session_state.get("execute_mix_save") and st.session_state.current_page == "Materials & Mixes":
         payload = st.session_state.mix_payload_draft
         try:
@@ -801,7 +846,6 @@ def main_application():
                                     total_mass = 0
                                     total_gwp = 0
                                     
-                                    # Extract components for pie chart
                                     for comp in factors_df.index:
                                         if comp in mix_row and pd.notna(mix_row[comp]):
                                             mass = safe_float(mix_row[comp])
@@ -859,7 +903,6 @@ def main_application():
 
         elif mode == "Create Custom Material / Mix":
             
-            # Show instant green success banner if a save just occurred
             if st.session_state.get("mix_success_message"):
                 st.success(st.session_state.mix_success_message)
                 st.session_state.mix_success_message = None
@@ -869,7 +912,6 @@ def main_application():
                 st.markdown("#### Design a Custom Material or Mix")
                 
             with col_mix_clear:
-                # Clear Form Logic using the rock-solid Reset Counter
                 if not st.session_state.get("confirm_clear_mix", False):
                     if st.button("Clear Form & Start Over", key=f"btn_clear_mix_init_{st.session_state.mix_reset_counter}"):
                         st.session_state.confirm_clear_mix = True
@@ -888,7 +930,6 @@ def main_application():
                             st.session_state.confirm_clear_mix = False
                             st.rerun()
             
-            # Using the Reset Counter to make sure all inputs are fresh
             d_name = st.session_state.get("draft_mix_name", "")
             custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key=f"mix_name_input_{st.session_state.mix_reset_counter}")
             st.caption("Tip: include the strength class in the name (e.g. 'C70/85 HSC Girder Mix'). "
@@ -1076,7 +1117,6 @@ def main_application():
                             "adhoc_materials": valid_adhoc
                         }
                         
-                        # Robust Duplicate Checking (ignores spaces and capitals)
                         clean_new_name = custom_mix_name.strip().lower()
                         clean_new_cat = custom_cat.strip().lower()
                         existing_mix = next((m for m in user_mixes if m['mix_name'].strip().lower() == clean_new_name and m['category'].strip().lower() == clean_new_cat), None)
@@ -1108,7 +1148,6 @@ def main_application():
 
     elif st.session_state.current_page == "Project Assessment":
         
-        # Show instant green success banner if a save just occurred
         if st.session_state.get("proj_success_message"):
             st.success(st.session_state.proj_success_message)
             st.session_state.proj_success_message = None 
@@ -1117,7 +1156,6 @@ def main_application():
         
         with col_proj_details:
             st.markdown("### 1. Project Details & Structure")
-            # Project reset counter forces blank state!
             st.session_state.draft_proj_name = st.text_input("Project Name:", value=st.session_state.draft_proj_name, placeholder="Enter project name...", key=f"proj_name_{st.session_state.project_reset_counter}")
             
         with col_clear:
@@ -1173,7 +1211,6 @@ def main_application():
                                 if val and val.lower() != "nan":
                                     default_unit = val
 
-                        # UUIDs are unique, so deleting the list completely clears these widgets!
                         st.session_state.draft_components.append({
                             "id": str(uuid.uuid4()),
                             "base_name": comp,
@@ -1218,10 +1255,8 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                # 1. Start with an empty list to prioritize the Excel sheet
                 units = []
                 
-                # 2. Pull the EXACT units from the Excel sheet FIRST
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp["base_name"]).strip().lower()
                     unit_row = db["unit_logic"][match_mask]
@@ -1229,15 +1264,12 @@ def main_application():
                         sheet_units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
                         units.extend([su for su in sheet_units if su]) 
 
-                # 3. Create a master fallback list of all possible units
                 master_fallback_units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "% by volume", "% by weight", "m", "m2", "units"]
                 
-                # 4. Add any missing fallback units to the VERY BOTTOM so the user is never trapped
                 for fallback in master_fallback_units:
                     if fallback not in units:
                         units.append(fallback)
                         
-                # 5. Guarantee the list is never completely empty
                 if not units:
                     units = ["m3"]
 
@@ -1343,7 +1375,6 @@ def main_application():
                         st.session_state.project_results_df = df
                         st.session_state.project_totals = totals
                         st.session_state.project_clean_data = clean_data
-                        # a new calculation invalidates the previous durability run
                         st.session_state.sl_detail = None
                         st.session_state.sl_materials = None
                         st.session_state.sl_sig = None
@@ -1406,8 +1437,6 @@ def main_application():
 
     elif st.session_state.current_page == "My Library":
         
-        # FIX 1: Replaced st.tabs with a horizontal radio button. 
-        # Streamlit has a known bug where rendering complex charts inside hidden tabs crashes the frontend into a white screen!
         lib_view = st.radio("Select Library View:", ["Saved Projects", "Saved Custom Mixes"], horizontal=True, label_visibility="collapsed")
         st.markdown("---")
         
@@ -1419,12 +1448,9 @@ def main_application():
                 user_projects = []
             
             if user_projects:
-                # Safely remove duplicate names and filter out any empty names
                 proj_names = list(dict.fromkeys([p['project_name'] for p in user_projects if p.get('project_name')]))
                 
                 if proj_names:
-                    # FIX 2: Stale Key Safety Net. If a project is deleted or renamed, we must forcefully delete the old memory key 
-                    # before rendering the radio button, otherwise Streamlit silently crashes the page.
                     if "lib_proj_radio_ui" in st.session_state and st.session_state.lib_proj_radio_ui not in proj_names:
                         del st.session_state["lib_proj_radio_ui"]
                         
@@ -1432,7 +1458,6 @@ def main_application():
                     
                     with col_list:
                         st.markdown("#### Project List")
-                        # Let Streamlit handle the state safely
                         selected_proj = st.radio("Select Project", proj_names, label_visibility="collapsed", key="lib_proj_radio_ui")
                             
                     with col_details:
@@ -1547,11 +1572,9 @@ def main_application():
             if not user_mixes:
                 st.info("No custom mixes found on your account. Create one in 'Materials & Mixes'!")
             else:
-                # Safely remove duplicate names
                 mix_names = list(dict.fromkeys([m['mix_name'] for m in user_mixes if m.get('mix_name')]))
                 
                 if mix_names:
-                    # FIX 2: Stale Key Safety Net for Mixes
                     if "lib_mix_radio_ui" in st.session_state and st.session_state.lib_mix_radio_ui not in mix_names:
                         del st.session_state["lib_mix_radio_ui"]
                         
@@ -1576,7 +1599,6 @@ def main_application():
                             m_col2.metric("GWP100 Factor", f"{props['Factor_GWP (kgCO2e/kg)']:,.3f} kgCO2e/kg")
                             m_col3.metric("GWP100 Total", f"{props['Factor_GWP (kgCO2e/kg)'] * props['Mass (kg/m3)']:,.2f} kgCO2e/m³")
 
-                            # Show what the Service Life engine will auto-fill for this mix
                             refs = sl.get_refs(db)
                             s_props = sl.get_strength(c_mix_name, refs)
                             cem, add, found = sl.autofill_binder(c_mix_name, db, user_mixes, factors_df, refs)
@@ -1591,11 +1613,9 @@ def main_application():
                             chart_components_mass = {}
                             chart_components_carbon = {}
                             
-                            recipe_data = []
                             if m.get("components"):
                                 for c, val in m["components"].items():
                                     if val > 0: 
-                                        recipe_data.append({"Material": c, "Quantity": val, "Type": "Standard"})
                                         if c in factors_df.index:
                                             factor_row = factors_df.loc[c]
                                             c_gwp = val * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
@@ -1603,7 +1623,6 @@ def main_application():
                                             chart_components_carbon[c] = c_gwp
                             if m.get("adhoc_materials"):
                                 for adhoc in m["adhoc_materials"]:
-                                    recipe_data.append({"Material": adhoc["Material Name"], "Quantity": adhoc["Quantity"], "Type": "Custom"})
                                     c = adhoc["Material Name"]
                                     val = adhoc["Quantity"]
                                     c_gwp = val * adhoc["GWP100 (kgCO2e/kg)"]
