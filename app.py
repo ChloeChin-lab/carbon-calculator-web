@@ -1489,246 +1489,262 @@ def main_application():
                             st.rerun()
                     with col_n:
                         if st.button("No, Change Name"):
-                            st.session_state.confirm_overwrite_name = None
-                            st.rerun()
+                        st.session_state.confirm_overwrite_name = None
+                        st.rerun()
 
     elif st.session_state.current_page == "My Library":
         
-        tab_proj, tab_mix = st.tabs(["Saved Projects", "Saved Custom Mixes"])
+        # FIX 1: Replaced st.tabs with a horizontal radio button. 
+        # Streamlit has a known bug where rendering complex charts inside hidden tabs crashes the frontend into a white screen!
+        lib_view = st.radio("Select Library View:", ["Saved Projects", "Saved Custom Mixes"], horizontal=True, label_visibility="collapsed")
+        st.markdown("---")
         
-        with tab_proj:
-            projects_res = supabase.table("saved_projects").select("*").eq("user_id", st.session_state.user_id).execute()
-            user_projects = projects_res.data if projects_res.data else []
+        if lib_view == "Saved Projects":
+            try:
+                projects_res = supabase.table("saved_projects").select("*").eq("user_id", st.session_state.user_id).execute()
+                user_projects = projects_res.data if projects_res.data else []
+            except Exception:
+                user_projects = []
             
             if user_projects:
-                # Safely remove duplicate names to prevent the radio button from crashing
-                proj_names = list(dict.fromkeys([p['project_name'] for p in user_projects]))
+                # Safely remove duplicate names and filter out any empty names
+                proj_names = list(dict.fromkeys([p['project_name'] for p in user_projects if p.get('project_name')]))
                 
-                col_list, col_details = st.columns([1, 2.5])
-                
-                with col_list:
-                    st.markdown("#### Project List")
-                    # Let Streamlit handle the state entirely using the key! No more double-state infinite loops.
-                    selected_proj = st.radio("Select Project", proj_names, label_visibility="collapsed", key="lib_proj_radio_ui")
+                if proj_names:
+                    # FIX 2: Stale Key Safety Net. If a project is deleted or renamed, we must forcefully delete the old memory key 
+                    # before rendering the radio button, otherwise Streamlit silently crashes the page.
+                    if "lib_proj_radio_ui" in st.session_state and st.session_state.lib_proj_radio_ui not in proj_names:
+                        del st.session_state["lib_proj_radio_ui"]
                         
-                with col_details:
-                    p = next((proj for proj in user_projects if proj['project_name'] == selected_proj), None)
-                    if p:
-                        st.markdown(f"### {p['project_name']}")
-                        st.caption(f"Structure Template: {p['structure_type']} | Baseline GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e")
-                        
-                        draft_comps = []
-                        raw_data = p.get("component_data", [])
-                        
-                        if isinstance(raw_data, dict):
-                            for c_name, c_details in raw_data.items():
-                                draft_comps.append({
-                                    "custom_name": c_name,
-                                    "base_name": "Extra",
-                                    "count": 1,
-                                    "materials": [{
-                                        "label": "",
-                                        "qty": c_details.get("quantity", 0.0),
-                                        "unit": c_details.get("unit", "m3"),
-                                        "ref_value": c_details.get("ref_value", 0.0),
-                                        "ref_per_unit": c_details.get("ref_per_unit", False),
-                                        "mix": c_details.get("assigned_mix", "")
-                                    }]
-                                })
-                        else:
-                            for comp in raw_data:
-                                mats = []
-                                for mat in comp.get("materials", []):
-                                    mats.append({
-                                        "label": mat.get("label", ""),
-                                        "qty": mat.get("quantity", 0.0),
-                                        "unit": mat.get("unit", "m3"),
-                                        "ref_value": mat.get("ref_value", 0.0),
-                                        "ref_per_unit": mat.get("ref_per_unit", False),
-                                        "mix": mat.get("assigned_mix", "")
+                    col_list, col_details = st.columns([1, 2.5])
+                    
+                    with col_list:
+                        st.markdown("#### Project List")
+                        # Let Streamlit handle the state safely
+                        selected_proj = st.radio("Select Project", proj_names, label_visibility="collapsed", key="lib_proj_radio_ui")
+                            
+                    with col_details:
+                        p = next((proj for proj in user_projects if proj['project_name'] == selected_proj), None)
+                        if p:
+                            st.markdown(f"### {p['project_name']}")
+                            st.caption(f"Structure Template: {p['structure_type']} | Baseline GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e")
+                            
+                            draft_comps = []
+                            raw_data = p.get("component_data", [])
+                            
+                            if isinstance(raw_data, dict):
+                                for c_name, c_details in raw_data.items():
+                                    draft_comps.append({
+                                        "custom_name": c_name,
+                                        "base_name": "Extra",
+                                        "count": 1,
+                                        "materials": [{
+                                            "label": "",
+                                            "qty": c_details.get("quantity", 0.0),
+                                            "unit": c_details.get("unit", "m3"),
+                                            "ref_value": c_details.get("ref_value", 0.0),
+                                            "ref_per_unit": c_details.get("ref_per_unit", False),
+                                            "mix": c_details.get("assigned_mix", "")
+                                        }]
                                     })
-                                draft_comps.append({
-                                    "base_name": comp.get("base_name", "Extra"),
-                                    "custom_name": comp.get("component_name", ""),
-                                    "count": comp.get("multiplier_count", 1),
-                                    "materials": mats
-                                })
+                            else:
+                                for comp in raw_data:
+                                    mats = []
+                                    for mat in comp.get("materials", []):
+                                        mats.append({
+                                            "label": mat.get("label", ""),
+                                            "qty": mat.get("quantity", 0.0),
+                                            "unit": mat.get("unit", "m3"),
+                                            "ref_value": mat.get("ref_value", 0.0),
+                                            "ref_per_unit": mat.get("ref_per_unit", False),
+                                            "mix": mat.get("assigned_mix", "")
+                                        })
+                                    draft_comps.append({
+                                        "base_name": comp.get("base_name", "Extra"),
+                                        "custom_name": comp.get("component_name", ""),
+                                        "count": comp.get("multiplier_count", 1),
+                                        "materials": mats
+                                    })
 
-                        df, totals, _ = calculate_project_data(draft_comps, db, user_mixes, factors_df)
-                        
-                        if df is not None:
-                            render_results_table_and_totals(df, totals)
-                        else:
-                            st.info("No calculable materials found in this project.")
-                        
-                        st.markdown("---")
-                        
-                        proj_id = p.get('id', str(p.get('project_name')))
-                        del_key = f"del_proj_confirm_{proj_id}"
-                        
-                        if not st.session_state.get(del_key, False):
-                            btn_col_rn, btn_col_a, btn_col_b = st.columns([2, 1.5, 1.5])
+                            df, totals, _ = calculate_project_data(draft_comps, db, user_mixes, factors_df)
                             
-                            with btn_col_rn:
-                                new_p_name = st.text_input("Rename Project:", value=p['project_name'], key=f"rn_p_{proj_id}")
-                                st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-                                if st.button("Update Name", key=f"btn_rn_{proj_id}"):
-                                    try:
-                                        supabase.table("saved_projects").update({"project_name": new_p_name}).eq("id", proj_id).execute()
-                                        st.success("Project renamed!")
+                            if df is not None:
+                                render_results_table_and_totals(df, totals)
+                            else:
+                                st.info("No calculable materials found in this project.")
+                            
+                            st.markdown("---")
+                            
+                            proj_id = p.get('id', str(p.get('project_name')))
+                            del_key = f"del_proj_confirm_{proj_id}"
+                            
+                            if not st.session_state.get(del_key, False):
+                                btn_col_rn, btn_col_a, btn_col_b = st.columns([2, 1.5, 1.5])
+                                
+                                with btn_col_rn:
+                                    new_p_name = st.text_input("Rename Project:", value=p['project_name'], key=f"rn_p_{proj_id}")
+                                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+                                    if st.button("Update Name", key=f"btn_rn_{proj_id}"):
+                                        try:
+                                            supabase.table("saved_projects").update({"project_name": new_p_name}).eq("id", proj_id).execute()
+                                            st.success("Project renamed!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
+                                
+                                with btn_col_a:
+                                    st.markdown("<br>", unsafe_allow_html=True)
+                                    st.markdown('<span class="btn-grey"></span>', unsafe_allow_html=True)
+                                    st.button("Clone for Editing", key=f"load_proj_{proj_id}", on_click=load_project_to_session, args=(p, db))
+                                        
+                                with btn_col_b:
+                                    st.markdown("<br>", unsafe_allow_html=True)
+                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                    if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
+                                        st.session_state[del_key] = True
                                         st.rerun()
-                                    except Exception as e:
-                                        st.error("Failed to rename. Ensure you have the Supabase UPDATE policy enabled.")
-                            
-                            with btn_col_a:
-                                st.markdown("<br>", unsafe_allow_html=True)
-                                st.markdown('<span class="btn-grey"></span>', unsafe_allow_html=True)
-                                st.button("Clone for Editing", key=f"load_proj_{proj_id}", on_click=load_project_to_session, args=(p, db))
-                                    
-                            with btn_col_b:
-                                st.markdown("<br>", unsafe_allow_html=True)
-                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                                if st.button("Delete Project", key=f"btn_del_init_proj_{proj_id}"):
-                                    st.session_state[del_key] = True
-                                    st.rerun()
-                        else:
-                            st.error("Are you sure? This cannot be undone.")
-                            y_col, n_col = st.columns(2)
-                            with y_col:
-                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                                if st.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
-                                    if 'id' in p:
-                                        supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
+                            else:
+                                st.error("Are you sure? This cannot be undone.")
+                                y_col, n_col = st.columns(2)
+                                with y_col:
+                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                    if st.button("Yes, Delete", key=f"btn_del_yes_proj_{proj_id}"):
+                                        if 'id' in p:
+                                            supabase.table("saved_projects").delete().eq("id", p["id"]).execute()
+                                            st.session_state[del_key] = False
+                                            st.success("Project deleted.")
+                                            st.rerun()
+                                        else:
+                                            st.error("Missing 'id' column.")
+                                with n_col:
+                                    if st.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
                                         st.session_state[del_key] = False
-                                        st.success("Project deleted.")
                                         st.rerun()
-                                    else:
-                                        st.error("Missing 'id' column.")
-                            with n_col:
-                                if st.button("Cancel", key=f"btn_del_no_proj_{proj_id}"):
-                                    st.session_state[del_key] = False
-                                    st.rerun()
             else:
                 st.info("No projects saved under your account yet.")
 
-        with tab_mix:
+        elif lib_view == "Saved Custom Mixes":
             if not user_mixes:
                 st.info("No custom mixes found on your account. Create one in 'Materials & Mixes'!")
             else:
-                # Safely remove duplicate names to prevent the radio button from crashing
-                mix_names = list(dict.fromkeys([m['mix_name'] for m in user_mixes]))
+                # Safely remove duplicate names
+                mix_names = list(dict.fromkeys([m['mix_name'] for m in user_mixes if m.get('mix_name')]))
                 
-                col_m_list, col_m_details = st.columns([1, 2.5])
-                
-                with col_m_list:
-                    st.markdown("#### Material List")
-                    # Let Streamlit handle the state entirely using the key!
-                    selected_mix = st.radio("Select Mix", mix_names, label_visibility="collapsed", key="lib_mix_radio_ui")
+                if mix_names:
+                    # FIX 2: Stale Key Safety Net for Mixes
+                    if "lib_mix_radio_ui" in st.session_state and st.session_state.lib_mix_radio_ui not in mix_names:
+                        del st.session_state["lib_mix_radio_ui"]
                         
-                with col_m_details:
-                    m = next((mix for mix in user_mixes if mix['mix_name'] == selected_mix), None)
-                    if m:
-                        st.markdown(f"### {m['mix_name']}")
-                        st.caption(f"Assigned Category: {m['category']}")
-                        
-                        c_mix_name = f"Custom: {m['mix_name']}"
-                        props = calculate_mix_carbon(c_mix_name, db, user_mixes, factors_df)
-                        
-                        st.markdown("##### Performance Metrics")
-                        m_col1, m_col2, m_col3 = st.columns(3)
-                        m_col1.metric("Total Mass", f"{props['Mass (kg/m3)']:,.2f} kg/m³")
-                        m_col2.metric("GWP100 Factor", f"{props['Factor_GWP (kgCO2e/kg)']:,.3f} kgCO2e/kg")
-                        m_col3.metric("GWP100 Total", f"{props['Factor_GWP (kgCO2e/kg)'] * props['Mass (kg/m3)']:,.2f} kgCO2e/m³")
-                        
-                        chart_components_mass = {}
-                        chart_components_carbon = {}
-                        
-                        recipe_data = []
-                        if m.get("components"):
-                            for c, val in m["components"].items():
-                                if val > 0: 
-                                    recipe_data.append({"Material": c, "Quantity": val, "Type": "Standard"})
-                                    if c in factors_df.index:
-                                        factor_row = factors_df.loc[c]
-                                        c_gwp = val * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
-                                        chart_components_mass[c] = val
-                                        chart_components_carbon[c] = c_gwp
-                        if m.get("adhoc_materials"):
-                            for adhoc in m["adhoc_materials"]:
-                                recipe_data.append({"Material": adhoc["Material Name"], "Quantity": adhoc["Quantity"], "Type": "Custom"})
-                                c = adhoc["Material Name"]
-                                val = adhoc["Quantity"]
-                                c_gwp = val * adhoc["GWP100 (kgCO2e/kg)"]
-                                chart_components_mass[c] = val
-                                chart_components_carbon[c] = c_gwp
-                        
-                        if len(chart_components_mass) > 0:
-                            st.markdown("##### Mix Breakdown Analysis")
-                            pc_col1, pc_col2 = st.columns(2)
+                    col_m_list, col_m_details = st.columns([1, 2.5])
+                    
+                    with col_m_list:
+                        st.markdown("#### Material List")
+                        selected_mix = st.radio("Select Mix", mix_names, label_visibility="collapsed", key="lib_mix_radio_ui")
                             
-                            with pc_col1:
-                                st.markdown("**By Mass / Weight**")
-                                chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass": list(chart_components_mass.values())})
-                                pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
-                                    theta=alt.Theta(field="Mass", type="quantitative"),
-                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                    tooltip=["Component", "Mass"]
-                                ).properties(height=280)
-                                st.altair_chart(pie_mass, use_container_width=True)
-                                
-                            with pc_col2:
-                                st.markdown("**By GWP100 Carbon**")
-                                chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
-                                pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
-                                    theta=alt.Theta(field="Carbon", type="quantitative"),
-                                    color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
-                                    tooltip=["Component", "Carbon"]
-                                ).properties(height=280)
-                                st.altair_chart(pie_carbon, use_container_width=True)
-                                
-                        st.markdown("---")
-                        
-                        del_m_key = f"del_mix_confirm_{m['id']}"
-                        
-                        if not st.session_state.get(del_m_key, False):
-                            btn_col_rn, btn_col_a, btn_col_b = st.columns([2, 1.5, 1.5])
+                    with col_m_details:
+                        m = next((mix for mix in user_mixes if mix['mix_name'] == selected_mix), None)
+                        if m:
+                            st.markdown(f"### {m['mix_name']}")
+                            st.caption(f"Assigned Category: {m['category']}")
                             
-                            with btn_col_rn:
-                                new_m_name = st.text_input("Rename Mix:", value=m['mix_name'], key=f"rn_m_{m['id']}")
-                                st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
-                                if st.button("Update Name", key=f"btn_rn_m_{m['id']}"):
-                                    try:
-                                        supabase.table("user_mixes").update({"mix_name": new_m_name}).eq("id", m['id']).execute()
-                                        st.success("Mix renamed!")
+                            c_mix_name = f"Custom: {m['mix_name']}"
+                            props = calculate_mix_carbon(c_mix_name, db, user_mixes, factors_df)
+                            
+                            st.markdown("##### Performance Metrics")
+                            m_col1, m_col2, m_col3 = st.columns(3)
+                            m_col1.metric("Total Mass", f"{props['Mass (kg/m3)']:,.2f} kg/m³")
+                            m_col2.metric("GWP100 Factor", f"{props['Factor_GWP (kgCO2e/kg)']:,.3f} kgCO2e/kg")
+                            m_col3.metric("GWP100 Total", f"{props['Factor_GWP (kgCO2e/kg)'] * props['Mass (kg/m3)']:,.2f} kgCO2e/m³")
+                            
+                            chart_components_mass = {}
+                            chart_components_carbon = {}
+                            
+                            recipe_data = []
+                            if m.get("components"):
+                                for c, val in m["components"].items():
+                                    if val > 0: 
+                                        recipe_data.append({"Material": c, "Quantity": val, "Type": "Standard"})
+                                        if c in factors_df.index:
+                                            factor_row = factors_df.loc[c]
+                                            c_gwp = val * safe_float(factor_row.get('ECFGWP100_kgCO2e_kg', 0))
+                                            chart_components_mass[c] = val
+                                            chart_components_carbon[c] = c_gwp
+                            if m.get("adhoc_materials"):
+                                for adhoc in m["adhoc_materials"]:
+                                    recipe_data.append({"Material": adhoc["Material Name"], "Quantity": adhoc["Quantity"], "Type": "Custom"})
+                                    c = adhoc["Material Name"]
+                                    val = adhoc["Quantity"]
+                                    c_gwp = val * adhoc["GWP100 (kgCO2e/kg)"]
+                                    chart_components_mass[c] = val
+                                    chart_components_carbon[c] = c_gwp
+                            
+                            if len(chart_components_mass) > 0:
+                                st.markdown("##### Mix Breakdown Analysis")
+                                pc_col1, pc_col2 = st.columns(2)
+                                
+                                with pc_col1:
+                                    st.markdown("**By Mass / Weight**")
+                                    chart_data_mass = pd.DataFrame({"Component": list(chart_components_mass.keys()), "Mass": list(chart_components_mass.values())})
+                                    pie_mass = alt.Chart(chart_data_mass).mark_arc(innerRadius=40).encode(
+                                        theta=alt.Theta(field="Mass", type="quantitative"),
+                                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                        tooltip=["Component", "Mass"]
+                                    ).properties(height=280)
+                                    st.altair_chart(pie_mass, use_container_width=True)
+                                    
+                                with pc_col2:
+                                    st.markdown("**By GWP100 Carbon**")
+                                    chart_data_carbon = pd.DataFrame({"Component": list(chart_components_carbon.keys()), "Carbon": list(chart_components_carbon.values())})
+                                    pie_carbon = alt.Chart(chart_data_carbon).mark_arc(innerRadius=40).encode(
+                                        theta=alt.Theta(field="Carbon", type="quantitative"),
+                                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(title="Material", orient="bottom")),
+                                        tooltip=["Component", "Carbon"]
+                                    ).properties(height=280)
+                                    st.altair_chart(pie_carbon, use_container_width=True)
+                                    
+                            st.markdown("---")
+                            
+                            del_m_key = f"del_mix_confirm_{m['id']}"
+                            
+                            if not st.session_state.get(del_m_key, False):
+                                btn_col_rn, btn_col_a, btn_col_b = st.columns([2, 1.5, 1.5])
+                                
+                                with btn_col_rn:
+                                    new_m_name = st.text_input("Rename Mix:", value=m['mix_name'], key=f"rn_m_{m['id']}")
+                                    st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+                                    if st.button("Update Name", key=f"btn_rn_m_{m['id']}"):
+                                        try:
+                                            supabase.table("user_mixes").update({"mix_name": new_m_name}).eq("id", m['id']).execute()
+                                            st.success("Mix renamed!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error("Failed to rename.")
+                                            
+                                with btn_col_a:
+                                    st.markdown("<br>", unsafe_allow_html=True)
+                                    st.markdown('<span class="btn-grey"></span>', unsafe_allow_html=True)
+                                    st.button("Clone for Editing", key=f"load_mix_{m['id']}", on_click=load_mix_to_session, args=(m,))
+                                    
+                                with btn_col_b:
+                                    st.markdown("<br>", unsafe_allow_html=True)
+                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                    if st.button("Delete Mix", key=f"btn_del_init_mix_{m['id']}"):
+                                        st.session_state[del_m_key] = True
                                         st.rerun()
-                                    except Exception as e:
-                                        st.error("Failed to rename.")
-                                        
-                            with btn_col_a:
-                                st.markdown("<br>", unsafe_allow_html=True)
-                                st.markdown('<span class="btn-grey"></span>', unsafe_allow_html=True)
-                                st.button("Clone for Editing", key=f"load_mix_{m['id']}", on_click=load_mix_to_session, args=(m,))
-                                
-                            with btn_col_b:
-                                st.markdown("<br>", unsafe_allow_html=True)
-                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                                if st.button("Delete Mix", key=f"btn_del_init_mix_{m['id']}"):
-                                    st.session_state[del_m_key] = True
-                                    st.rerun()
-                        else:
-                            st.error("Are you sure? This cannot be undone.")
-                            y_m_col, n_m_col = st.columns(2)
-                            with y_m_col:
-                                st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
-                                if st.button("Yes, Delete", key=f"btn_del_yes_mix_{m['id']}"):
-                                    supabase.table("user_mixes").delete().eq("id", m['id']).execute()
-                                    st.session_state[del_m_key] = False
-                                    st.success("Mix deleted.")
-                                    st.rerun()
-                            with n_m_col:
-                                if st.button("Cancel", key=f"btn_del_no_mix_{m['id']}"):
-                                    st.session_state[del_m_key] = False
-                                    st.rerun()
+                            else:
+                                st.error("Are you sure? This cannot be undone.")
+                                y_m_col, n_m_col = st.columns(2)
+                                with y_m_col:
+                                    st.markdown('<span class="btn-red"></span>', unsafe_allow_html=True)
+                                    if st.button("Yes, Delete", key=f"btn_del_yes_mix_{m['id']}"):
+                                        supabase.table("user_mixes").delete().eq("id", m['id']).execute()
+                                        st.session_state[del_m_key] = False
+                                        st.success("Mix deleted.")
+                                        st.rerun()
+                                with n_m_col:
+                                    if st.button("Cancel", key=f"btn_del_no_mix_{m['id']}"):
+                                        st.session_state[del_m_key] = False
+                                        st.rerun()
 
 # Execute application
 if st.session_state.user_id is None:
