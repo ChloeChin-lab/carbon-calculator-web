@@ -6,7 +6,7 @@ from service_life import group_project_materials, rebuild_draft, sf
 
 
 # ============================================================================
-# 1. MATERIAL / MIX COMPARISON  (identical behaviour to the old tab)
+# 1. MATERIAL / MIX COMPARISON
 # ============================================================================
 def render_mix_comparison(db, user_mixes, factors_df, all_available_mixes,
                           calc_mix_carbon, safe_float, generate_pdf_report, has_fpdf):
@@ -269,12 +269,11 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
             f"**Highest Σ CSEPP:** {top_sum['Project']} at {top_sum['Σ CSEPP']:,.2f}. "
             f"Structure CSEPP is the fair like-for-like metric across designs of different "
             f"size or with a different number of mixes; Σ CSEPP is the per-material total and "
-            f"grows with the number of materials, so only compare it between structures of "
-            f"comparable make-up.")
+            f"grows with the number of materials.")
     else:
         st.warning("None of the selected projects has saved service life data yet, so CSEPP "
                    "cannot be compared. Run the **Service Life & CSEPP** page for each project "
-                   "and press *Save service life results to this project*.")
+                   "and press *Save*.")
 
     t1, t2, t3, t4 = st.tabs(["Carbon totals", "Material split",
                               "CSEPP by material", "CSEPP metrics"])
@@ -306,12 +305,11 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
                 grouped = alt.Chart(cd).mark_bar().encode(
                     x=alt.X("CSEPP:Q", title="CSEPP (MPa·yr / tonne CO2e)"),
                     y=alt.Y("Material:N", title=""),
-                    color=alt.Color("Project:N"),
-                    yOffset="Project:N",
+                    color=alt.Color("Project:N"), yOffset="Project:N",
                     tooltip=["Project", "Material", "CSEPP"]).properties(height=alt.Step(30))
                 st.altair_chart(grouped, use_container_width=True)
             else:
-                st.info("Saved projects contain no material that passed the durability gate.")
+                st.info("No material passed the durability gate in the saved runs.")
         else:
             st.info("No per-material CSEPP data saved for the selected projects.")
     with t4:
@@ -325,11 +323,9 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
                 yOffset="Metric:N",
                 tooltip=["Project", "Metric", "Value"]).properties(height=alt.Step(40))
             st.altair_chart(side, use_container_width=True)
-            st.caption("Both metrics are shown side by side. They have different magnitudes by "
-                       "construction — Σ CSEPP adds one term per material, Structure CSEPP "
-                       "collapses the structure into a single equivalent material. Compare "
-                       "like with like: read Structure CSEPP across designs, Σ CSEPP within "
-                       "a design family.")
+            st.caption("Both metrics side by side. They differ in magnitude by construction — "
+                       "Σ CSEPP adds one term per material, Structure CSEPP collapses the "
+                       "structure into a single equivalent material.")
         else:
             st.info("No service life data available for the selected projects.")
 
