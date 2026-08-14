@@ -7,6 +7,10 @@ from io import BytesIO
 import altair as alt
 import uuid
 
+# New modules: service life / CSEPP engine and the comparison workflows
+import service_life as sl
+import comparison as cmp_mod
+
 # Try to load FPDF for PDF generation. If it is not installed, the app won't crash.
 try:
     from fpdf import FPDF
@@ -184,26 +188,40 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
+def _pack_database(xls):
+    """Maps every worksheet in the workbook onto the internal database keys.
+    Missing sheets simply come back empty, so adding a new tab never breaks the app."""
+    def g(name):
+        return clean_df(xls.get(name, pd.DataFrame()))
+    return {
+        # --- original tabs ---
+        "factors":    g("Component_Factors"),
+        "mixes":      g("Mix_Designs"),
+        "structures": g("Project_Structures"),
+        "unit_logic": g("Unit_Logic"),
+        "direct":     g("Direct_Results"),
+        # --- new service life / durability reference tabs ---
+        "strength_classes":  g("Strength_Classes"),
+        "carbonation_k400":  g("Carbonation_k400"),
+        "location_k1":       g("Location_k1"),
+        "exposure_classes":  g("Exposure_Classes"),
+        "chloride_ctl":      g("Chloride_CTL"),
+        "chloride_dc":       g("Chloride_Dc"),
+        "binder_mapping":    g("Binder_Mapping"),
+    }
+
 @st.cache_data(ttl=600) 
 def load_database():
     """Pulls the master data from Google Sheets (or a local file if offline)."""
-    required_sheets = ["Component_Factors", "Mix_Designs", "Project_Structures", "Unit_Logic", "Direct_Results"]
-    
     # Attempt to load from the live Google Sheet first
     if SHEET_ID and len(SHEET_ID) > 20: 
         export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
         try:
-            response = requests.get(export_url, timeout=10)
+            response = requests.get(export_url, timeout=15)
             response.raise_for_status()
             excel_data = BytesIO(response.content)
-            xls = pd.read_excel(excel_data, sheet_name=required_sheets)
-            return {
-                "factors": clean_df(xls.get("Component_Factors", pd.DataFrame())),
-                "mixes": clean_df(xls.get("Mix_Designs", pd.DataFrame())),
-                "structures": clean_df(xls.get("Project_Structures", pd.DataFrame())),
-                "unit_logic": clean_df(xls.get("Unit_Logic", pd.DataFrame())),
-                "direct": clean_df(xls.get("Direct_Results", pd.DataFrame()))
-            }
+            xls = pd.read_excel(excel_data, sheet_name=None)
+            return _pack_database(xls)
         except Exception as e:
             print(f"Warning: Cloud Database failed to load. Reason: {e}")
             pass 
@@ -212,14 +230,8 @@ def load_database():
     local_path = "materials_database.xlsx"
     if os.path.exists(local_path):
         try:
-            xls = pd.read_excel(local_path, sheet_name=required_sheets)
-            return {
-                "factors": clean_df(xls.get("Component_Factors", pd.DataFrame())),
-                "mixes": clean_df(xls.get("Mix_Designs", pd.DataFrame())),
-                "structures": clean_df(xls.get("Project_Structures", pd.DataFrame())),
-                "unit_logic": clean_df(xls.get("Unit_Logic", pd.DataFrame())),
-                "direct": clean_df(xls.get("Direct_Results", pd.DataFrame()))
-            }
+            xls = pd.read_excel(local_path, sheet_name=None)
+            return _pack_database(xls)
         except Exception as e:
             print(f"Warning: Local Database failed to load. Reason: {e}")
             return None
@@ -235,6 +247,10 @@ def wipe_project_form_memory():
     st.session_state.project_results_df = None
     st.session_state.project_totals = None
     st.session_state.project_clean_data = []
+    # also clear any service life results tied to the old project
+    for k in ("sl_detail", "sl_materials", "sl_table", "sl_sig"):
+        if k in st.session_state:
+            st.session_state[k] = None
 
 def wipe_mix_form_memory():
     """Forces the Custom Mix form to completely clear by advancing the reset counter."""
@@ -394,9 +410,9 @@ def calculate_mix_carbon(mix_name, db, user_mixes, factors_df):
     }
 
 def calculate_project_data(draft_components, db, user_mixes, factors_df):
-    """The master engineering engine that calculates total quantities, mass, and carbon for an entire project."""
+    """The master engineering engine that calculates total quantities, mass, volume and carbon for an entire project."""
     results_list = []
-    grand_totals = {"mass": 0.0, "gwp": 0.0}
+    grand_totals = {"mass": 0.0, "gwp": 0.0, "volume": 0.0}
     clean_project_data = []
 
     for comp_idx, comp in enumerate(draft_components):
@@ -440,8 +456,12 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                         total_mass_kg = base_vol * mass_per_m3
 
                 item_gwp = total_mass_kg * props["Factor_GWP (kgCO2e/kg)"]
+                # Volume is needed by the Service Life / CSEPP engine
+                total_vol_m3 = (total_mass_kg / mass_per_m3) if mass_per_m3 > 0 else 0.0
+
                 grand_totals["mass"] += total_mass_kg
                 grand_totals["gwp"] += item_gwp
+                grand_totals["volume"] += total_vol_m3
                 item_label = f"{comp_idx + 1}. {c_name} {mat.get('label', '')}".strip()
                 
                 if logic_type in ["PERCENT_VOL", "PERCENT_WEIGHT", "LITER_PER_M3"]:
@@ -452,9 +472,11 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
                 
                 results_list.append({
                     "Item": item_label,
+                    "Component": c_name,
                     "Material": mix,
                     "Volume/Amount": display_qty, 
                     "Unit": unit_str,
+                    "Total Volume (m³)": total_vol_m3,
                     "Total Mass (kg)": total_mass_kg,
                     "Total GWP100 (kgCO2e)": item_gwp
                 })
@@ -481,17 +503,27 @@ def calculate_project_data(draft_components, db, user_mixes, factors_df):
 def render_results_table_and_totals(df, totals):
     """Draws the standard engineering results table, perfectly formatted with commas and 2 decimal places."""
     display_df = df.copy()
+    # "Component" is only used internally by the Service Life engine
+    if "Component" in display_df.columns:
+        display_df = display_df.drop(columns=["Component"])
     display_df.index = display_df.index + 1 
     
+    if "Total Volume (m³)" in display_df.columns:
+        display_df["Total Volume (m³)"] = display_df["Total Volume (m³)"].apply(lambda x: f"{float(x):,.3f}")
     display_df["Total Mass (kg)"] = display_df["Total Mass (kg)"].apply(lambda x: f"{float(x):,.2f}")
     display_df["Total GWP100 (kgCO2e)"] = display_df["Total GWP100 (kgCO2e)"].apply(lambda x: f"{float(x):,.2f}")
     
     st.table(display_df)
     
+    vol_row = ""
+    if "volume" in totals:
+        vol_row = f'<tr><td style="font-weight: bold; padding: 8px 0;">Total Volume:</td><td>{totals["volume"]:,.3f} m³</td></tr>'
+
     totals_html = f"""
     <div style="border: 1px solid #d3d3d3; border-radius: 5px; padding: 20px; background-color: #f9f9f9; margin-bottom: 20px;">
         <h4 style="margin-top: 0; color: #000; font-family: sans-serif;">Project Grand Totals</h4>
         <table style="width: 100%; border-collapse: collapse; font-size: 16px; color: #000; font-family: sans-serif;">
+            {vol_row}
             <tr><td style="font-weight: bold; width: 250px; padding: 8px 0;">Total Mass:</td><td>{totals['mass']:,.2f} kg</td></tr>
             <tr><td style="font-weight: bold; padding: 8px 0; background-color: #f0f0f0;">Total GWP100:</td><td style="background-color: #f0f0f0;">{totals['gwp']:,.2f} kgCO2e</td></tr>
         </table>
@@ -528,13 +560,14 @@ def login_page():
                 st.error("Invalid email or password. Please contact your administrator for access.")
 
 def welcome_dashboard():
-    """Draws the beautiful home screen with the three main feature portals."""
+    """Draws the beautiful home screen with the five main feature portals."""
     username = st.session_state.user_email.split('@')[0].capitalize() if st.session_state.user_email else "User"
     st.markdown(f"""
     <div style="padding: 40px; background: linear-gradient(135deg, #1e293b, #0f172a); border-radius: 12px; margin-bottom: 30px; color: white; border: 1px solid #334155;">
         <h1 style="margin-top: 0; color: white;">Welcome, {username}!</h1>
         <p style="font-size: 18px; color: #cbd5e1; max-width: 800px;">
-            Manage your structural material libraries, assess project environmental impact, and optimise engineering designs for maximum sustainability.
+            Manage your structural material libraries, assess project environmental impact, verify durability
+            and design life, and optimise engineering designs for maximum sustainability.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -542,9 +575,9 @@ def welcome_dashboard():
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("""
-        <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 140px;">
+        <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 150px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Materials & Mixes</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">The master library. Configure ingredients, build custom mixes, and compare properties.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">The master library. Configure ingredients, build custom mixes, and review properties.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_mats", use_container_width=True):
@@ -553,7 +586,7 @@ def welcome_dashboard():
         
     with col2:
         st.markdown("""
-        <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-top: 4px solid #1ABC9C; height: 140px;">
+        <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-top: 4px solid #1ABC9C; height: 150px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Project Assessment</h3>
             <p style="color: #5D6D7E; font-size: 14px;">The structural assembly. Configure components, assign materials, and generate assessments.</p>
         </div><br>""", unsafe_allow_html=True)
@@ -564,7 +597,31 @@ def welcome_dashboard():
         
     with col3:
         st.markdown("""
-        <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 140px;">
+        <div style="background-color: #FEF5E7; padding: 20px; border-radius: 8px; border-top: 4px solid #E67E22; height: 150px;">
+            <h3 style="color: #2C3E50; margin-top: 0;">Service Life & CSEPP</h3>
+            <p style="color: #5D6D7E; font-size: 14px;">Durability engine. Carbonation and chloride design life, then CSEPP carbon efficiency.</p>
+        </div><br>""", unsafe_allow_html=True)
+        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+        if st.button("Access", key="btn_nav_sl", use_container_width=True):
+            st.session_state.current_page = "Service Life & CSEPP"
+            st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        st.markdown("""
+        <div style="background-color: #F4ECF7; padding: 20px; border-radius: 8px; border-top: 4px solid #8E44AD; height: 150px;">
+            <h3 style="color: #2C3E50; margin-top: 0;">Comparison & Analysis</h3>
+            <p style="color: #5D6D7E; font-size: 14px;">Benchmark mixes against mixes, and complete projects against each other on carbon and CSEPP.</p>
+        </div><br>""", unsafe_allow_html=True)
+        st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
+        if st.button("Access", key="btn_nav_cmp", use_container_width=True):
+            st.session_state.current_page = "Comparison & Analysis"
+            st.rerun()
+
+    with col5:
+        st.markdown("""
+        <div style="background-color: #F8F9F9; padding: 20px; border-radius: 8px; border-top: 4px solid #95A5A6; height: 150px;">
             <h3 style="color: #2C3E50; margin-top: 0;">My Library</h3>
             <p style="color: #5D6D7E; font-size: 14px;">Your historical database. Review, analyse, and manage your saved projects and custom mixes.</p>
         </div><br>""", unsafe_allow_html=True)
@@ -572,6 +629,9 @@ def welcome_dashboard():
         if st.button("Access", key="btn_nav_saved", use_container_width=True):
             st.session_state.current_page = "My Library"
             st.rerun()
+
+    with col6:
+        st.markdown("")
 
 def main_application():
     """The master router. Determines which page to draw and executes top-level database saves to avoid Streamlit state errors."""
@@ -596,7 +656,8 @@ def main_application():
 
     st.sidebar.markdown("---")
     
-    nav_options = ["Materials & Mixes", "Project Assessment", "My Library"]
+    nav_options = ["Materials & Mixes", "Project Assessment", "Service Life & CSEPP",
+                   "Comparison & Analysis", "My Library"]
     current_idx = nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0
     
     # Safe navigation without on_change callbacks (Prevents silent blank screen bug)
@@ -680,13 +741,14 @@ def main_application():
         default_mode_idx = 0
         if st.session_state.get("mix_mode_radio") == "Create Custom Material / Mix":
             default_mode_idx = 1
-        elif st.session_state.get("mix_mode_radio") == "Compare Mixes":
-            default_mode_idx = 2
             
-        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Material / Mix", "Compare Mixes"], horizontal=True, index=default_mode_idx, key="mix_mode_radio_ui")
+        mode = st.radio("Choose an action:", ["View Standard Materials", "Create Custom Material / Mix"], horizontal=True, index=default_mode_idx, key="mix_mode_radio_ui")
         
         if st.session_state.mix_mode_radio != mode:
             st.session_state.mix_mode_radio = mode
+
+        st.caption("Looking for the mix comparison tool? It now lives in the "
+                   "**Comparison & Analysis** page, together with project-to-project comparison.")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -829,6 +891,9 @@ def main_application():
             # Using the Reset Counter to make sure all inputs are fresh
             d_name = st.session_state.get("draft_mix_name", "")
             custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key=f"mix_name_input_{st.session_state.mix_reset_counter}")
+            st.caption("Tip: include the strength class in the name (e.g. 'C70/85 HSC Girder Mix'). "
+                       "The Service Life engine reads the grade straight out of the name to auto-fill "
+                       "fck, fcm and the suggested k400,l / Dc values.")
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
@@ -1040,178 +1105,6 @@ def main_application():
                         st.session_state.confirm_overwrite_mix_name = None
                         st.session_state.mix_payload_draft = None
                         st.rerun()
-
-        elif mode == "Compare Mixes":
-            st.markdown("#### Compare Materials & Mixes")
-            st.info("Select multiple materials or custom mixes below to analyse their sustainability metrics side-by-side.")
-            
-            selected_for_comp = st.multiselect("Select Mixes to Compare:", all_available_mixes, key="compare_multiselect")
-            
-            if selected_for_comp:
-                comp_data = []
-                for mix_name in selected_for_comp:
-                    props = calculate_mix_carbon(mix_name, db, user_mixes, factors_df)
-                    mass = props["Mass (kg/m3)"]
-                    gwp = props["Factor_GWP (kgCO2e/kg)"] * mass
-                    comp_data.append({
-                        "Material": mix_name,
-                        "Total Mass (kg/m³)": mass,
-                        "GWP100 Factor (kgCO2e/kg)": props["Factor_GWP (kgCO2e/kg)"],
-                        "Total GWP100 (kgCO2e/m³)": gwp
-                    })
-                    
-                comp_df = pd.DataFrame(comp_data)
-                
-                if len(comp_data) > 1:
-                    st.markdown("---")
-                    sorted_df = comp_df.sort_values("Total GWP100 (kgCO2e/m³)")
-                    best = sorted_df.iloc[0]
-                    worst = sorted_df.iloc[-1]
-                    
-                    if worst["Total GWP100 (kgCO2e/m³)"] > 0:
-                        savings_pct = ((worst["Total GWP100 (kgCO2e/m³)"] - best["Total GWP100 (kgCO2e/m³)"]) / worst["Total GWP100 (kgCO2e/m³)"]) * 100
-                    else:
-                        savings_pct = 0
-                        
-                    st.markdown(f"""
-                    <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-left: 6px solid #1ABC9C; margin-bottom: 20px;">
-                        <h4 style="margin-top: 0; color: #2C3E50;">Executive Summary & Technical Insight</h4>
-                        <p style="font-size: 16px; color: #34495E; line-height: 1.6;">
-                        This comparative analysis evaluates the <strong>Embodied Carbon Intensity (ECI)</strong> across your selected structural materials. 
-                        Based on the dataset, <strong>{best['Material']}</strong> demonstrates optimal environmental performance, 
-                        yielding a Global Warming Potential (GWP100) of <strong>{best['Total GWP100 (kgCO2e/m³)']:,.2f} kgCO2e/m³</strong> at a density of <strong>{best['Total Mass (kg/m³)']:,.2f} kg/m³</strong>.
-                        <br><br>
-                        Choosing the optimal material (<strong>{best['Material']}</strong>) instead of the highest-impact option (<strong>{worst['Material']}</strong>) results in a 
-                        <strong>{savings_pct:.1f}% reduction</strong> in environmental impact per cubic metre. For large-scale infrastructure applications, this material substitution represents a highly effective decarbonisation strategy.
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-                    st.markdown("##### Visual Analytics")
-                    tab_bar, tab_scatter, tab_matrix = st.tabs(["GWP100 Leaderboard", "Density vs. Carbon Trade-off", "Ingredient Matrix"])
-                    
-                    with tab_bar:
-                        best_val = float(best['Total GWP100 (kgCO2e/m³)']) 
-                        
-                        base_chart = alt.Chart(comp_df).encode(
-                            x=alt.X("Total GWP100 (kgCO2e/m³):Q", title="Global Warming Potential (kgCO2e/m³)", scale=alt.Scale(domain=[0, comp_df["Total GWP100 (kgCO2e/m³)"].max() * 1.15])),
-                            y=alt.Y("Material:N", sort="-x", title="")
-                        )
-                        
-                        # Properly identifies the winner using the cubed symbol!
-                        bars = base_chart.mark_bar(cornerRadiusEnd=4, height=40).encode(
-                            color=alt.condition(
-                                alt.datum['Total GWP100 (kgCO2e/m³)'] == best_val,
-                                alt.value('#27ae60'),  
-                                alt.value('#95a5a6')   
-                            ),
-                            tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
-                        )
-                        
-                        text = base_chart.mark_text(
-                            align='left',
-                            baseline='middle',
-                            dx=5,
-                            fontWeight='bold'
-                        ).encode(
-                            text=alt.Text('Total GWP100 (kgCO2e/m³):Q', format=',.2f')
-                        )
-                        
-                        final_bar_chart = (bars + text).properties(height=alt.Step(60)) 
-                        st.altair_chart(final_bar_chart, use_container_width=True)
-                        
-                    with tab_scatter:
-                        scatter = alt.Chart(comp_df).mark_circle(size=200).encode(
-                            x=alt.X("Total Mass (kg/m³):Q", title="Density (kg/m³)", scale=alt.Scale(zero=False, padding=20)),
-                            y=alt.Y("Total GWP100 (kgCO2e/m³):Q", title="Total GWP100 (kgCO2e/m³)", scale=alt.Scale(zero=False, padding=20)),
-                            color=alt.Color("Material:N", legend=alt.Legend(title="Material")),
-                            tooltip=["Material", "Total Mass (kg/m³)", "Total GWP100 (kgCO2e/m³)"]
-                        ).properties(height=350)
-                        st.altair_chart(scatter, use_container_width=True)
-                        
-                    with tab_matrix:
-                        st.markdown("**Side-by-Side Ingredient Comparison (kg per m³)**")
-                        matrix_data = []
-                        for mix_name in selected_for_comp:
-                            is_custom = mix_name.startswith("Custom: ")
-                            found_ingredients = False
-                            
-                            if is_custom:
-                                mix_n = mix_name.replace("Custom: ", "")
-                                match_mix = next((m for m in user_mixes if m["mix_name"] == mix_n), None)
-                                if match_mix:
-                                    if match_mix.get("components"):
-                                        for c, val in match_mix["components"].items():
-                                            if safe_float(val) > 0:
-                                                matrix_data.append({"Mix": mix_name, "Ingredient": c, "Mass (kg)": safe_float(val)})
-                                                found_ingredients = True
-                                    if match_mix.get("adhoc_materials"):
-                                        for adhoc in match_mix["adhoc_materials"]:
-                                            if safe_float(adhoc.get("Quantity")) > 0:
-                                                matrix_data.append({"Mix": mix_name, "Ingredient": adhoc["Material Name"], "Mass (kg)": safe_float(adhoc.get("Quantity"))})
-                                                found_ingredients = True
-                            else:
-                                match_df = db["mixes"][db["mixes"]["Mix_Key"] == mix_name] if not db["mixes"].empty and "Mix_Key" in db["mixes"].columns else pd.DataFrame()
-                                if not match_df.empty:
-                                    mix_row = match_df.iloc[0]
-                                    for comp in factors_df.index:
-                                        if comp in mix_row and pd.notna(mix_row[comp]) and safe_float(mix_row[comp]) > 0:
-                                            matrix_data.append({"Mix": mix_name, "Ingredient": comp, "Mass (kg)": safe_float(mix_row[comp])})
-                                            found_ingredients = True
-                                            
-                            # Standalone materials like Steel are treated as 100% pure ingredient
-                            if not found_ingredients:
-                                props = calculate_mix_carbon(mix_name, db, user_mixes, factors_df)
-                                matrix_data.append({"Mix": mix_name, "Ingredient": f"{mix_name} (Base Material)", "Mass (kg)": props["Mass (kg/m3)"]})
-
-                        if matrix_data:
-                            matrix_df = pd.DataFrame(matrix_data)
-                            pivot_df = matrix_df.pivot_table(index="Ingredient", columns="Mix", values="Mass (kg)", fill_value=0)
-                            st.dataframe(pivot_df.style.format("{:,.2f}"), use_container_width=True)
-                
-                    st.markdown("##### Detailed Metric Breakdown & Data Export")
-                    
-                    def highlight_best(s):
-                        is_min = s == s.min()
-                        return ['background-color: #d4edda; color: #155724; font-weight: bold' if v else '' for v in is_min]
-                        
-                    display_df = comp_df.set_index("Material")
-                    styled_df = display_df.style.apply(highlight_best).format({
-                        "Total Mass (kg/m³)": "{:,.2f}",
-                        "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
-                        "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
-                    })
-                    st.table(styled_df)
-                    
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    col_csv, col_pdf, _ = st.columns([1, 1, 1.5])
-                    
-                    csv_data = comp_df.to_csv(index=False).encode('utf-8')
-                    col_csv.download_button(
-                        label="📄 Download Data (CSV)",
-                        data=csv_data,
-                        file_name="material_comparison.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                    
-                    if HAS_FPDF:
-                        pdf_bytes = generate_pdf_report(comp_df, best, worst, savings_pct)
-                        if pdf_bytes:
-                            col_pdf.download_button(
-                                label="📊 Download PDF Report",
-                                data=pdf_bytes,
-                                file_name="sustainability_report.pdf",
-                                mime="application/pdf",
-                                use_container_width=True
-                            )
-                else:
-                    st.error("Please select at least one more material from the dropdown above to generate the side-by-side comparison report and visual charts.")
-                    st.dataframe(comp_df.set_index("Material").style.format({
-                        "Total Mass (kg/m³)": "{:,.2f}",
-                        "GWP100 Factor (kgCO2e/kg)": "{:,.3f}",
-                        "Total GWP100 (kgCO2e/m³)": "{:,.2f}"
-                    }), use_container_width=True)
 
     elif st.session_state.current_page == "Project Assessment":
         
@@ -1450,6 +1343,10 @@ def main_application():
                         st.session_state.project_results_df = df
                         st.session_state.project_totals = totals
                         st.session_state.project_clean_data = clean_data
+                        # a new calculation invalidates the previous durability run
+                        st.session_state.sl_detail = None
+                        st.session_state.sl_materials = None
+                        st.session_state.sl_sig = None
                     else:
                         st.error("Please assign at least one material with an amount > 0.")
                     st.rerun()
@@ -1458,6 +1355,10 @@ def main_application():
                 st.markdown("---")
                 
                 render_results_table_and_totals(st.session_state.project_results_df, st.session_state.project_totals)
+
+                st.info("Next step: open **Service Life & CSEPP** in the sidebar to run the "
+                        "carbonation or chloride design life check on these materials and get "
+                        "the CSEPP score.")
                 
                 st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
                 if st.button("Save Project"):
@@ -1491,6 +1392,17 @@ def main_application():
                         if st.button("No, Change Name"):
                             st.session_state.confirm_overwrite_name = None
                             st.rerun()
+
+    elif st.session_state.current_page == "Service Life & CSEPP":
+        sl.render_service_life_page(
+            supabase, db, user_mixes, factors_df,
+            calculate_mix_carbon, calculate_project_data)
+
+    elif st.session_state.current_page == "Comparison & Analysis":
+        cmp_mod.render_comparison_page(
+            supabase, db, user_mixes, factors_df, all_available_mixes,
+            calculate_mix_carbon, calculate_project_data,
+            safe_float, generate_pdf_report, HAS_FPDF)
 
     elif st.session_state.current_page == "My Library":
         
@@ -1528,6 +1440,14 @@ def main_application():
                         if p:
                             st.markdown(f"### {p['project_name']}")
                             st.caption(f"Structure Template: {p['structure_type']} | Baseline GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e")
+
+                            sl_data = p.get("service_life_data") or {}
+                            sl_summary = sl_data.get("summary") or {}
+                            if sl_summary:
+                                st.caption(
+                                    f"Service life assessed — exposure {sl_data.get('exposure_class','?')} | "
+                                    f"Σ CSEPP {safe_float(sl_summary.get('sum_csepp')):,.2f} | "
+                                    f"Structure CSEPP {safe_float(sl_summary.get('structure_csepp')):,.2f} MPa·yr/tCO2e")
                             
                             draft_comps = []
                             raw_data = p.get("component_data", [])
@@ -1655,6 +1575,18 @@ def main_application():
                             m_col1.metric("Total Mass", f"{props['Mass (kg/m3)']:,.2f} kg/m³")
                             m_col2.metric("GWP100 Factor", f"{props['Factor_GWP (kgCO2e/kg)']:,.3f} kgCO2e/kg")
                             m_col3.metric("GWP100 Total", f"{props['Factor_GWP (kgCO2e/kg)'] * props['Mass (kg/m3)']:,.2f} kgCO2e/m³")
+
+                            # Show what the Service Life engine will auto-fill for this mix
+                            refs = sl.get_refs(db)
+                            s_props = sl.get_strength(c_mix_name, refs)
+                            cem, add, found = sl.autofill_binder(c_mix_name, db, user_mixes, factors_df, refs)
+                            if s_props["Grade"] or found:
+                                d_col1, d_col2, d_col3 = st.columns(3)
+                                d_col1.metric("Detected Grade", s_props["Grade"] or "—")
+                                d_col2.metric("fck,cyl", f"{s_props['fck_cyl']:,.0f} MPa" if s_props["fck_cyl"] else "—")
+                                d_col3.metric("Total Binder", f"{cem + add:,.1f} kg/m³" if found else "—")
+                                st.caption("These are the values the Service Life & CSEPP page will "
+                                           "auto-fill for this mix. All of them stay editable there.")
                             
                             chart_components_mass = {}
                             chart_components_carbon = {}
