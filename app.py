@@ -1489,8 +1489,8 @@ def main_application():
                             st.rerun()
                     with col_n:
                         if st.button("No, Change Name"):
-                        st.session_state.confirm_overwrite_name = None
-                        st.rerun()
+                            st.session_state.confirm_overwrite_name = None
+                            st.rerun()
 
     elif st.session_state.current_page == "My Library":
         
