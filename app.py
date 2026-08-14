@@ -1325,16 +1325,28 @@ def main_application():
                         if st.button("Remove Component", key=f"del_comp_{comp['id']}"):
                             comps_to_remove.append(comp)
 
-                units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "% by volume", "% by weight", "m", "m2", "units"]
+                # 1. Start with an empty list to prioritize the Excel sheet
+                units = []
                 
+                # 2. Pull the EXACT units from the Excel sheet FIRST
                 if not db["unit_logic"].empty and "Component_Name" in db["unit_logic"].columns:
                     match_mask = db["unit_logic"]["Component_Name"].astype(str).str.strip().str.lower() == str(comp["base_name"]).strip().lower()
                     unit_row = db["unit_logic"][match_mask]
                     if not unit_row.empty and "Unit_Options" in unit_row.columns:
                         sheet_units = [u.strip() for u in str(unit_row["Unit_Options"].values[0]).split(",")]
-                        for su in sheet_units:
-                            if su not in units:
-                                units.append(su)
+                        units.extend([su for su in sheet_units if su]) 
+
+                # 3. Create a master fallback list of all possible units
+                master_fallback_units = ["m3", "m3 / unit", "tonnes", "tonnes / unit", "kg", "L", "L/m3", "% by volume", "% by weight", "m", "m2", "units"]
+                
+                # 4. Add any missing fallback units to the VERY BOTTOM so the user is never trapped
+                for fallback in master_fallback_units:
+                    if fallback not in units:
+                        units.append(fallback)
+                        
+                # 5. Guarantee the list is never completely empty
+                if not units:
+                    units = ["m3"]
 
                 mats_to_remove = []
                 
@@ -1489,22 +1501,26 @@ def main_application():
             user_projects = projects_res.data if projects_res.data else []
             
             if user_projects:
-                proj_names = [p['project_name'] for p in user_projects]
+                # Safely remove duplicate names to prevent the radio button from crashing
+                proj_names = list(dict.fromkeys([p['project_name'] for p in user_projects]))
                 
+                # Check if we need to set a default selected project
                 if "lib_selected_proj" not in st.session_state or st.session_state.lib_selected_proj not in proj_names:
                     st.session_state.lib_selected_proj = proj_names[0]
+                    
+                # Find the index of the currently selected project
+                p_idx = proj_names.index(st.session_state.lib_selected_proj)
                     
                 col_list, col_details = st.columns([1, 2.5])
                 
                 with col_list:
                     st.markdown("#### Project List")
-                    selected_proj = st.radio("Select Project", proj_names, label_visibility="collapsed", key="lib_proj_radio")
-                    if selected_proj != st.session_state.lib_selected_proj:
-                        st.session_state.lib_selected_proj = selected_proj
-                        st.rerun()
+                    # Render the radio button. We removed the manual st.rerun() here to prevent the blank screen crash!
+                    selected_proj = st.radio("Select Project", proj_names, index=p_idx, label_visibility="collapsed", key="lib_proj_radio")
+                    st.session_state.lib_selected_proj = selected_proj
                         
                 with col_details:
-                    p = next((proj for proj in user_projects if proj['project_name'] == st.session_state.lib_selected_proj), None)
+                    p = next((proj for proj in user_projects if proj['project_name'] == selected_proj), None)
                     if p:
                         st.markdown(f"### {p['project_name']}")
                         st.caption(f"Structure Template: {p['structure_type']} | Baseline GWP100: {p['total_embodied_carbon']:,.2f} kgCO2e")
@@ -1607,22 +1623,26 @@ def main_application():
             if not user_mixes:
                 st.info("No custom mixes found on your account. Create one in 'Materials & Mixes'!")
             else:
-                mix_names = [m['mix_name'] for m in user_mixes]
+                # Safely remove duplicate names to prevent the radio button from crashing
+                mix_names = list(dict.fromkeys([m['mix_name'] for m in user_mixes]))
                 
+                # Check if we need to set a default selected mix
                 if "lib_selected_mix" not in st.session_state or st.session_state.lib_selected_mix not in mix_names:
                     st.session_state.lib_selected_mix = mix_names[0]
+                    
+                # Find the index of the currently selected mix
+                m_idx = mix_names.index(st.session_state.lib_selected_mix)
                     
                 col_m_list, col_m_details = st.columns([1, 2.5])
                 
                 with col_m_list:
                     st.markdown("#### Material List")
-                    selected_mix = st.radio("Select Mix", mix_names, label_visibility="collapsed", key="lib_mix_radio")
-                    if selected_mix != st.session_state.lib_selected_mix:
-                        st.session_state.lib_selected_mix = selected_mix
-                        st.rerun()
+                    # Render the radio button. We removed the manual st.rerun() here to prevent the blank screen crash!
+                    selected_mix = st.radio("Select Mix", mix_names, index=m_idx, label_visibility="collapsed", key="lib_mix_radio")
+                    st.session_state.lib_selected_mix = selected_mix
                         
                 with col_m_details:
-                    m = next((mix for mix in user_mixes if mix['mix_name'] == st.session_state.lib_selected_mix), None)
+                    m = next((mix for mix in user_mixes if mix['mix_name'] == selected_mix), None)
                     if m:
                         st.markdown(f"### {m['mix_name']}")
                         st.caption(f"Assigned Category: {m['category']}")
