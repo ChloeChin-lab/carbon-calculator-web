@@ -1504,20 +1504,12 @@ def main_application():
                 # Safely remove duplicate names to prevent the radio button from crashing
                 proj_names = list(dict.fromkeys([p['project_name'] for p in user_projects]))
                 
-                # Check if we need to set a default selected project
-                if "lib_selected_proj" not in st.session_state or st.session_state.lib_selected_proj not in proj_names:
-                    st.session_state.lib_selected_proj = proj_names[0]
-                    
-                # Find the index of the currently selected project
-                p_idx = proj_names.index(st.session_state.lib_selected_proj)
-                    
                 col_list, col_details = st.columns([1, 2.5])
                 
                 with col_list:
                     st.markdown("#### Project List")
-                    # Render the radio button. We removed the manual st.rerun() here to prevent the blank screen crash!
-                    selected_proj = st.radio("Select Project", proj_names, index=p_idx, label_visibility="collapsed", key="lib_proj_radio")
-                    st.session_state.lib_selected_proj = selected_proj
+                    # Let Streamlit handle the state entirely using the key! No more double-state infinite loops.
+                    selected_proj = st.radio("Select Project", proj_names, label_visibility="collapsed", key="lib_proj_radio_ui")
                         
                 with col_details:
                     p = next((proj for proj in user_projects if proj['project_name'] == selected_proj), None)
@@ -1626,20 +1618,12 @@ def main_application():
                 # Safely remove duplicate names to prevent the radio button from crashing
                 mix_names = list(dict.fromkeys([m['mix_name'] for m in user_mixes]))
                 
-                # Check if we need to set a default selected mix
-                if "lib_selected_mix" not in st.session_state or st.session_state.lib_selected_mix not in mix_names:
-                    st.session_state.lib_selected_mix = mix_names[0]
-                    
-                # Find the index of the currently selected mix
-                m_idx = mix_names.index(st.session_state.lib_selected_mix)
-                    
                 col_m_list, col_m_details = st.columns([1, 2.5])
                 
                 with col_m_list:
                     st.markdown("#### Material List")
-                    # Render the radio button. We removed the manual st.rerun() here to prevent the blank screen crash!
-                    selected_mix = st.radio("Select Mix", mix_names, index=m_idx, label_visibility="collapsed", key="lib_mix_radio")
-                    st.session_state.lib_selected_mix = selected_mix
+                    # Let Streamlit handle the state entirely using the key!
+                    selected_mix = st.radio("Select Mix", mix_names, label_visibility="collapsed", key="lib_mix_radio_ui")
                         
                 with col_m_details:
                     m = next((mix for mix in user_mixes if mix['mix_name'] == selected_mix), None)
