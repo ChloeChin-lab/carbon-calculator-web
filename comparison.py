@@ -53,7 +53,7 @@ def render_mix_comparison(db, user_mixes, factors_df, all_available_mixes,
     st.markdown(f"""
     <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px;
                 border-left: 6px solid #1ABC9C; margin-bottom: 20px;">
-        <h4 style="margin-top: 0; color: #2C3E50;">Executive Summary &amp; Technical Insight</h4>
+        <h4 style="margin-top: 0; color: #2C3E50;">Executive Summary and Technical Insight</h4>
         <p style="font-size: 16px; color: #34495E; line-height: 1.6;">
         This comparative analysis evaluates the <strong>Embodied Carbon Intensity (ECI)</strong>
         across your selected structural materials. Based on the dataset,
