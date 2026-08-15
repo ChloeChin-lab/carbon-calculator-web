@@ -2,7 +2,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from service_life import group_project_materials, rebuild_draft, sf
+from service_life import INDEX_COLUMN, group_project_materials, rebuild_draft, sf
 
 
 # ============================================================================
@@ -227,8 +227,7 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
                 f"{int(sf(summ.get('n_pass')))}/{int(sf(summ.get('n_materials')))} pass"
             for r in (sl.get("materials") or sl.get("results") or []):
                 csepp_rows.append({"Project": name, "Material": r.get("Material"),
-                                   "Carbon efficiency index": sf(r.get("CSEPP (MPa.year per tonne CO2e)",
-                                                                     r.get("CSEPP (MPa·yr/tCO2e)")))})
+                                   "Carbon efficiency index": sf(r.get(INDEX_COLUMN))})
         else:
             row["Exposure"] = "not assessed"
             row["Governing tsl (yr)"] = float("nan")
