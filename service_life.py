@@ -1206,7 +1206,7 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
             y=alt.Y("Material:N", sort="-x", title=""),
             tooltip=["Material", "Index"]).properties(height=alt.Step(42)),
             use_container_width=True)
-        st.caption("Carbon efficiency of each mix, in %s. Higher is better." % INDEX_UNITS)
+        st.caption("Carbon efficiency of each mix, in %s." % INDEX_UNITS)
 
     split = mat_res.melt(
         id_vars="Material",
