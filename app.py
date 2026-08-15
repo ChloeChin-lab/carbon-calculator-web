@@ -125,7 +125,7 @@ if "mix_reset_counter" not in st.session_state:
 if "project_reset_counter" not in st.session_state:
     st.session_state.project_reset_counter = 0
 
-# Background memory specifically for the Project Assessment tab so it doesn't wipe when you click away
+# Background memory specifically for the Project Builder tab so it doesn't wipe when you click away
 if "draft_proj_name" not in st.session_state:
     st.session_state.draft_proj_name = ""
 if "draft_structure" not in st.session_state:
@@ -138,6 +138,12 @@ if "project_totals" not in st.session_state:
     st.session_state.project_totals = None
 if "project_clean_data" not in st.session_state:
     st.session_state.project_clean_data = []
+# The id of whatever project is currently loaded in the Project Builder tab,
+# once it has actually been saved to the database. None means the project on
+# screen has never been saved, so there is nothing yet for Durability and
+# Performance to attach an assessment to.
+if "current_project_id" not in st.session_state:
+    st.session_state.current_project_id = None
 
 def generate_pdf_report(df, best, worst, savings):
     """Generates a downloadable PDF report for the material comparison tab."""
@@ -265,7 +271,7 @@ def load_database():
     return {"_source": None, "_sheets": [], "_errors": errors}
 
 def wipe_project_form_memory():
-    """Forces the Project Assessment form to completely clear by advancing the reset counter."""
+    """Forces the Project Builder form to completely clear by advancing the reset counter."""
     st.session_state.project_reset_counter += 1
     st.session_state.draft_proj_name = ""
     st.session_state.draft_structure = "---"
@@ -273,6 +279,7 @@ def wipe_project_form_memory():
     st.session_state.project_results_df = None
     st.session_state.project_totals = None
     st.session_state.project_clean_data = []
+    st.session_state.current_project_id = None
     for k in ("sl_detail", "sl_materials", "sl_table", "sl_sig", "sl_alloc"):
         if k in st.session_state:
             st.session_state[k] = None
@@ -291,8 +298,8 @@ def wipe_mix_form_memory():
         st.session_state.draft_mix_comps = {}
 
 def load_project_to_session(p_data, db):
-    """Loads a saved project from My Library safely into the Project Assessment tab for editing."""
-    st.session_state.current_page = "Project Assessment"
+    """Loads a saved project from My Library safely into the Project Builder tab for editing."""
+    st.session_state.current_page = "Project Builder"
     wipe_project_form_memory()
     
     st.session_state.draft_proj_name = f"{p_data['project_name']} (Copy)"
@@ -628,12 +635,12 @@ def welcome_dashboard():
     with col2:
         st.markdown("""
         <div style="background-color: #E8F8F5; padding: 20px; border-radius: 8px; border-top: 4px solid #1ABC9C; height: 150px;">
-            <h3 style="color: #2C3E50; margin-top: 0;">Project Assessment</h3>
+            <h3 style="color: #2C3E50; margin-top: 0;">Project Builder</h3>
             <p style="color: #5D6D7E; font-size: 14px;">The structural assembly. Configure components, assign materials, and generate assessments.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_proj", use_container_width=True):
-            st.session_state.current_page = "Project Assessment"
+            st.session_state.current_page = "Project Builder"
             st.rerun()
         
     with col3:
@@ -707,7 +714,7 @@ def main_application():
 
     st.sidebar.markdown("---")
     
-    nav_options = ["Materials & Mixes", "Project Assessment", "Durability and Performance",
+    nav_options = ["Materials & Mixes", "Project Builder", "Durability and Performance",
                    "Comparison and Analysis", "My Library"]
     current_idx = nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0
     
@@ -758,7 +765,7 @@ def main_application():
             st.error(f"Database Save Error: Details: {e}")
             st.session_state.execute_mix_save = False
             
-    if st.session_state.get("execute_save") and st.session_state.current_page == "Project Assessment":
+    if st.session_state.get("execute_save") and st.session_state.current_page == "Project Builder":
         project_payload = {
             "user_id": st.session_state.user_id,
             "project_name": st.session_state.draft_proj_name,
@@ -769,16 +776,23 @@ def main_application():
         try:
             if st.session_state.get("existing_proj_id"):
                 supabase.table("saved_projects").update(project_payload).eq("id", st.session_state.existing_proj_id).execute()
+                st.session_state.current_project_id = st.session_state.existing_proj_id
                 msg = f"Project '{st.session_state.draft_proj_name}' successfully overwritten and updated!"
             else:
-                supabase.table("saved_projects").insert(project_payload).execute()
+                insert_res = supabase.table("saved_projects").insert(project_payload).execute()
+                st.session_state.current_project_id = insert_res.data[0]["id"] if insert_res.data else None
                 msg = f"Project '{st.session_state.draft_proj_name}' saved successfully to your account!"
-                
+
             st.session_state.proj_success_message = msg
             st.session_state.execute_save = False
             st.session_state.existing_proj_id = None
-            
-            wipe_project_form_memory()
+
+            # Note: we deliberately do NOT wipe the form/results here anymore.
+            # The project is now saved (current_project_id is set), and the
+            # calculated results stay on screen so the "Current Project" data
+            # source on the Durability and Performance page has something to
+            # attach a saved assessment to. Use "Clear All & Start Over" to
+            # start a fresh, blank project.
             st.rerun()
         except Exception as e:
             st.error(f"Failed to save project. Error: {e}")
@@ -1149,7 +1163,7 @@ def main_application():
                         st.session_state.mix_payload_draft = None
                         st.rerun()
 
-    elif st.session_state.current_page == "Project Assessment":
+    elif st.session_state.current_page == "Project Builder":
         
         if st.session_state.get("proj_success_message"):
             st.success(st.session_state.proj_success_message)
