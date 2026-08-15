@@ -363,8 +363,8 @@ def load_project_to_session(p_data, db):
     st.session_state.draft_components = new_draft
 
 def load_mix_to_session(m_data):
-    """Loads a saved mix from My Library safely into the Materials & Mixes builder."""
-    st.session_state.current_page = "Materials & Mixes"
+    """Loads a saved mix from My Library safely into the Materials and Mixes builder."""
+    st.session_state.current_page = "Materials and Mixes"
     st.session_state.mix_mode_radio = "Create Custom Material / Mix"
     wipe_mix_form_memory()
     
@@ -624,12 +624,12 @@ def welcome_dashboard():
     with col1:
         st.markdown("""
         <div style="background-color: #F0F4F8; padding: 20px; border-radius: 8px; border-top: 4px solid #3498DB; height: 150px;">
-            <h3 style="color: #2C3E50; margin-top: 0;">Materials & Mixes</h3>
+            <h3 style="color: #2C3E50; margin-top: 0;">Materials and Mixes</h3>
             <p style="color: #5D6D7E; font-size: 14px;">The master library. Configure ingredients, build custom mixes, and review properties.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_mats", use_container_width=True):
-            st.session_state.current_page = "Materials & Mixes"
+            st.session_state.current_page = "Materials and Mixes"
             st.rerun()
         
     with col2:
@@ -659,7 +659,7 @@ def welcome_dashboard():
     with col4:
         st.markdown("""
         <div style="background-color: #F4ECF7; padding: 20px; border-radius: 8px; border-top: 4px solid #8E44AD; height: 150px;">
-            <h3 style="color: #2C3E50; margin-top: 0;">Comparison & Analysis</h3>
+            <h3 style="color: #2C3E50; margin-top: 0;">Comparison and Analysis</h3>
             <p style="color: #5D6D7E; font-size: 14px;">Benchmark mixes against mixes, and complete projects against each other on carbon and carbon efficiency.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
@@ -714,7 +714,7 @@ def main_application():
 
     st.sidebar.markdown("---")
     
-    nav_options = ["Materials & Mixes", "Project Design", "Durability and Performance",
+    nav_options = ["Materials and Mixes", "Project Design", "Durability and Performance",
                    "Comparison and Analysis", "My Library"]
     current_idx = nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0
     
@@ -745,7 +745,7 @@ def main_application():
     all_available_mixes = standard_mixes + [f"Custom: {name}" for name in custom_mix_names]
     factors_df = db["factors"].drop_duplicates(subset=["Component"]).set_index("Component") if not db["factors"].empty and "Component" in db["factors"].columns else pd.DataFrame()
 
-    if st.session_state.get("execute_mix_save") and st.session_state.current_page == "Materials & Mixes":
+    if st.session_state.get("execute_mix_save") and st.session_state.current_page == "Materials and Mixes":
         payload = st.session_state.mix_payload_draft
         try:
             if st.session_state.get("existing_mix_id"):
@@ -798,7 +798,7 @@ def main_application():
             st.error(f"Failed to save project. Error: {e}")
             st.session_state.execute_save = False
 
-    if st.session_state.current_page == "Materials & Mixes":
+    if st.session_state.current_page == "Materials and Mixes":
         
         default_mode_idx = 0
         if st.session_state.get("mix_mode_radio") == "Create Custom Material / Mix":
@@ -1355,7 +1355,7 @@ def main_application():
                 with col_nav_mix:
                     st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
                     if st.button("Create Custom Mix ➔", key=f"nav_btn_{comp['id']}"):
-                        st.session_state.current_page = "Materials & Mixes"
+                        st.session_state.current_page = "Materials and Mixes"
                         st.rerun()
 
             for comp in comps_to_remove:
@@ -1589,7 +1589,7 @@ def main_application():
 
         elif lib_view == "Saved Custom Mixes":
             if not user_mixes:
-                st.info("No custom mixes found on your account. Create one in 'Materials & Mixes'!")
+                st.info("No custom mixes found on your account. Create one in 'Materials and Mixes'!")
             else:
                 mix_names = list(dict.fromkeys([m['mix_name'] for m in user_mixes if m.get('mix_name')]))
                 
