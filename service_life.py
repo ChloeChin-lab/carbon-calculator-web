@@ -922,6 +922,26 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                         "mechanism": chosen.get("mechanism"),
                         "settings": chosen.get("settings") or {},
                     }
+                    # The "Which materials are concrete?" multiselect keeps whatever
+                    # it was last set to (it is not re-created for every project), so
+                    # without this it can silently stay on a stale selection from a
+                    # previous project or run instead of the one that was saved.
+                    saved_mats = chosen.get("materials") or []
+                    st.session_state.sl_pending_concrete = sorted({
+                        m.get("Material") for m in saved_mats if m.get("Material")})
+                    # Restore the calculated results too, not just the input grid,
+                    # so sections 4-7 (durability check, carbon efficiency, and the
+                    # Save button) reappear immediately instead of only coming back
+                    # once "Calculate" is pressed again.
+                    saved_detail = chosen.get("detail") or []
+                    if saved_detail:
+                        st.session_state.sl_detail = pd.DataFrame(saved_detail)
+                    if saved_mats:
+                        st.session_state.sl_materials = pd.DataFrame(saved_mats)
+                    st.session_state.sl_mechanism = chosen.get("mechanism")
+                    st.session_state.sl_exposure_class = chosen.get("exposure_class")
+                    st.session_state.sl_project_label = proj_label
+                    st.session_state.sl_project_id = proj_id
                     st.session_state.sl_opened_version = chosen.get("version_name")
                     st.session_state.sl_sig = None
                     st.rerun()
@@ -942,9 +962,19 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
     show_table(cm_all.drop(columns=["Is Concrete"]))
 
     concrete_default = sorted(cm_all[cm_all["Is Concrete"]]["Material"].unique().tolist())
+    all_material_options = sorted(cm_all["Material"].unique().tolist())
+    # If "Load this assessment into the grid" was just pressed, this holds the
+    # materials that were treated as the concretes in that saved run. Only keep
+    # the ones that still exist in this project so a stale name can never be
+    # passed to the widget below.
+    pending_concrete = st.session_state.pop("sl_pending_concrete", None)
+    if pending_concrete:
+        valid_restored = [m for m in pending_concrete if m in all_material_options]
+        if valid_restored:
+            st.session_state.sl_concrete_pick = valid_restored
     chosen_mats = st.multiselect(
         "Which of these materials are the concretes to be assessed?",
-        sorted(cm_all["Material"].unique().tolist()), default=concrete_default,
+        all_material_options, default=concrete_default,
         key="sl_concrete_pick",
         help="Anything left out of this list, such as strands, reinforcing bars and diesel, "
              "is treated as a supporting material. Its carbon is charged to the concrete of "
