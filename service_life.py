@@ -1,6 +1,5 @@
 import math
 import re
-from datetime import datetime
 
 import altair as alt
 import pandas as pd
@@ -826,14 +825,11 @@ def runs_overview(runs):
         rows.append({
             "Version": r.get("version_name", "unnamed"),
             "Project": r.get("project_name", ""),
-            "Saved": str(r.get("created_at", ""))[:16].replace("T", " "),
             "Exposure class": r.get("exposure_class", ""),
             "Model": str(r.get("mechanism", "")).title(),
             "Materials passed": "%s of %s" % (int(sf(summ.get("n_pass"))),
                                               int(sf(summ.get("n_materials")))),
             "Sum of material values": sf(summ.get("sum_index", summ.get("sum_csepp"))),
-            "Whole structure value": sf(summ.get("structure_index",
-                                                 summ.get("structure_csepp"))),
         })
     return pd.DataFrame(rows)
 
@@ -844,7 +840,7 @@ def runs_overview(runs):
 def _clear_page_state():
     for k in ("sl_detail", "sl_materials", "sl_table", "sl_sig", "sl_alloc",
               "sl_exposure_class", "sl_project_label", "sl_project_id",
-              "sl_pending_inputs", "sl_opened_version"):
+              "sl_pending_inputs", "sl_pending_settings", "sl_opened_version"):
         st.session_state[k] = None
 
 
@@ -921,6 +917,11 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                 chosen = runs[opts.index(choice) - 1]
                 if st.button("Load this assessment into the grid", key="sl_load_run"):
                     st.session_state.sl_pending_inputs = chosen.get("inputs") or []
+                    st.session_state.sl_pending_settings = {
+                        "exposure_class": chosen.get("exposure_class"),
+                        "mechanism": chosen.get("mechanism"),
+                        "settings": chosen.get("settings") or {},
+                    }
                     st.session_state.sl_opened_version = chosen.get("version_name")
                     st.session_state.sl_sig = None
                     st.rerun()
@@ -963,14 +964,41 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
     # ------------------------------------------------------------ exposure
     st.markdown("---")
     st.markdown("#### 2. Exposure environment and cover rules")
+
+    # If "Load this assessment into the grid" was just pressed, this holds the
+    # exposure class, mechanism and settings that produced that version, so
+    # every widget below can be pre-filled with them instead of the plain
+    # defaults. It is only meant to apply once, immediately after loading, so
+    # it is popped out here rather than read with .get().
+    restore = st.session_state.pop("sl_pending_settings", None)
+    restore_settings = (restore or {}).get("settings") or {}
+
+    def _seed(key, default, restored_value=None):
+        """Set the starting value for a keyed widget without also passing a
+        conflicting value=/index= argument: restored_value wins when a
+        version is being loaded, otherwise the key keeps whatever it already
+        holds, and only a brand new key falls back to default."""
+        if restored_value is not None:
+            st.session_state[key] = restored_value
+        elif key not in st.session_state:
+            st.session_state[key] = default
+
     exp = refs["exposure"]
     exp_labels = ["%s. %s" % (r["Class"], r["Description"]) for _, r in exp.iterrows()]
-    default_idx = next((i for i, r in enumerate(exp.to_dict("records"))
+    exp_records = exp.to_dict("records")
+    restored_label = None
+    if restore and restore.get("exposure_class"):
+        idx = next((i for i, r in enumerate(exp_records)
+                   if str(r.get("Class")).upper() == str(restore["exposure_class"]).upper()), None)
+        if idx is not None:
+            restored_label = exp_labels[idx]
+    default_idx = next((i for i, r in enumerate(exp_records)
                         if str(r.get("Class")) == "XS1"), 0)
+    _seed("sl_exposure", exp_labels[default_idx], restored_label)
     e_col1, e_col2 = st.columns([2, 1])
     with e_col1:
         pick_exp = st.selectbox("Exposure class, to EN 206 and EN 1992-1-1:",
-                                exp_labels, index=default_idx, key="sl_exposure",
+                                exp_labels, key="sl_exposure",
                                 help="The class you pick decides which model runs. Classes "
                                      "beginning XC run the carbonation model. Classes "
                                      "beginning XS or XD run the chloride model.")
@@ -986,24 +1014,27 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                    "service life model applies. Choose a class beginning XC, XD or XS.")
         return
 
+    _seed("sl_design_life", 100.0, restore_settings.get("design_life"))
+    _seed("sl_allowance", 10.0, restore_settings.get("cover_allowance"))
+    _seed("sl_qc", False, restore_settings.get("special_quality_control"))
     g1, g2, g3 = st.columns(3)
     with g1:
         design_life = st.number_input(
-            "Used design life (years):", min_value=1.0, value=100.0, step=5.0,
+            "Used design life (years):", min_value=1.0, step=5.0,
             key="sl_design_life",
             help="The service life you want to credit the structure with. It is compared "
                  "against the life the cover and the mix can deliver, and it also raises "
                  "the structural class by two once it reaches 100 years.")
     with g2:
         cover_allowance = st.number_input(
-            "Allowance for deviation in cover (mm):", min_value=0.0, value=10.0, step=5.0,
+            "Allowance for deviation in cover (mm):", min_value=0.0, step=5.0,
             key="sl_allowance",
             help="The construction tolerance that EN 1992-1-1 clause 4.4.1.3 adds on top of "
                  "the minimum durability cover. Normally 10 mm. The suggested cover in the "
                  "grid below is the minimum durability cover plus this allowance.")
     with g3:
         special_qc = st.checkbox(
-            "Special quality control assured", value=False, key="sl_qc",
+            "Special quality control assured", key="sl_qc",
             help="Tick this when the concrete production is monitored to the standard the "
                  "code describes. Ticking it lowers the structural class by one for every "
                  "row set to Automatic, which lowers the minimum durability cover by about "
@@ -1021,15 +1052,19 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                                     "carbon dioxide factor. You may then type any value.")
         suggestion = sf(loc_tab[loc_tab["Location_Type"].astype(str) == loc]
                         ["k1_default"].iloc[0], 1.0)
+        k1_restored = restore_settings.get("k1") if (restore and restore.get("mechanism") == "CARBONATION") else None
+        _seed("sl_k1_%s" % loc, float(suggestion), k1_restored)
         with c2:
             k1_value = st.number_input(
-                "Local carbon dioxide factor:", min_value=0.01, value=float(suggestion),
+                "Local carbon dioxide factor:", min_value=0.01,
                 step=0.01, format="%.2f", key="sl_k1_%s" % loc,
                 help="The carbon dioxide concentration at the site divided by the 400 parts "
                      "per million reference concentration.")
+        k2_restored = restore_settings.get("k2") if (restore and restore.get("mechanism") == "CARBONATION") else None
+        _seed("sl_k2", 1.40, k2_restored)
         with c3:
             k2_value = st.number_input(
-                "Future carbon dioxide factor:", min_value=0.01, value=1.40, step=0.05,
+                "Future carbon dioxide factor:", min_value=0.01, step=0.05,
                 format="%.2f", key="sl_k2",
                 help="Allows for the concentration rising over the life of the structure. "
                      "A value of 1.40 corresponds to roughly 560 parts per million.")
@@ -1037,25 +1072,29 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                    "coefficient multiplied by the square root of these two factors. You "
                    "only confirm the reference coefficient in the grid below.")
     else:
+        _seed("sl_distance", 0.001)
+        _seed("sl_c1", 0.60)
         c1, c2, c3 = st.columns(3)
         with c1:
             distance = st.number_input(
                 "Distance from the coastline (km):", min_value=0.001, max_value=10.0,
-                value=0.001, step=0.001, format="%.3f", key="sl_distance",
+                step=0.001, format="%.3f", key="sl_distance",
                 help="0.001 km is one metre from the shore, the most severe case. Ten "
                      "kilometres is treated as an urban location, the least severe case.")
         with c2:
             c1_value = st.number_input(
-                "Airborne salt constant:", min_value=0.01, value=0.60, step=0.05,
+                "Airborne salt constant:", min_value=0.01, step=0.05,
                 format="%.2f", key="sl_c1",
                 help="The calibration constant of the airborne salt relationship, which is "
                      "the salt concentration at one kilometre from the coast. The published "
                      "value is 0.6.")
         modelled = surface_chloride_from_distance(distance, c1=c1_value)
+        chloride_restored = restore_settings.get("surface_chloride") if (restore and restore.get("mechanism") == "CHLORIDE") else None
+        _seed("sl_surface_%.4f_%.2f" % (distance, c1_value), float(round(modelled, 3)), chloride_restored)
         with c3:
             surface_chloride = st.number_input(
                 "Surface chloride concentration (kg per m3):", min_value=0.0,
-                value=float(round(modelled, 3)), step=0.1, format="%.3f",
+                step=0.1, format="%.3f",
                 key="sl_surface_%.4f_%.2f" % (distance, c1_value),
                 help="Calculated from the two values on the left. Overwrite it only if you "
                      "have a measured value for the site.")
@@ -1196,13 +1235,10 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
     summ = structure_summary(mat_res)
 
     st.markdown("#### 6. Results")
-    s1, s2, s3, s4 = st.columns(4)
+    s1, s2, s3 = st.columns(3)
     s1.metric("Concrete volume", "{:,.2f} m3".format(summ["total_volume"]))
     s2.metric("Total embodied carbon", "{:,.3f} tonne CO2e".format(summ["total_carbon"]))
     s3.metric("Sum of the material values", "{:,.2f}".format(summ["sum_index"]))
-    s4.metric("Whole structure value",
-              "{:,.2f}".format(summ["structure_index"])
-              if not math.isnan(summ["structure_index"]) else "not available")
 
     passed = mat_res[mat_res["Durability check"] == "PASS"]
     if not passed.empty:
@@ -1269,57 +1305,60 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
     st.markdown("---")
     if proj_id:
         st.markdown("#### 7. Save this assessment as a version")
-        default_name = datetime.now().strftime("Assessment %Y-%m-%d %H:%M")
         v1, v2 = st.columns([3, 1])
         with v1:
             version_name = st.text_input(
-                "Version name:", value=default_name, key="sl_version_name",
-                help="Give this assessment a name you will recognise later, for example "
-                     "Coastal XS1 with 50 mm cover. Saving always creates a new version and "
-                     "never overwrites an earlier one.")
+                "Version name:", value="", key="sl_version_name",
+                placeholder="e.g. Coastal XS1 with 50 mm cover",
+                help="Give this assessment a name you will recognise later. Saving always "
+                     "creates a new version and never overwrites an earlier one.")
         with v2:
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
             do_save = st.button("Save", key="sl_save", use_container_width=True)
         if do_save:
-            payload = {
-                "user_id": st.session_state.user_id,
-                "project_id": proj_id,
-                "project_name": proj_label,
-                "version_name": version_name.strip() or default_name,
-                "exposure_class": exposure_class,
-                "mechanism": mechanism,
-                "settings": {"k1": k1_value, "k2": k2_value,
-                             "surface_chloride": surface_chloride,
-                             "cover_allowance": cover_allowance,
-                             "special_quality_control": bool(special_qc),
-                             "design_life": design_life},
-                "inputs": edited.fillna(0).to_dict("records"),
-                "detail": detail.replace([float("inf")], 1e12).fillna(0).to_dict("records"),
-                "materials": mat_res.replace([float("inf")], 1e12).fillna(0).to_dict("records"),
-                "summary": summ,
-            }
-            try:
-                supabase.table("service_life_runs").insert(payload).execute()
+            clean_version_name = version_name.strip()
+            if not clean_version_name:
+                st.error("Give this version a name before saving.")
+            else:
+                payload = {
+                    "user_id": st.session_state.user_id,
+                    "project_id": proj_id,
+                    "project_name": proj_label,
+                    "version_name": clean_version_name,
+                    "exposure_class": exposure_class,
+                    "mechanism": mechanism,
+                    "settings": {"k1": k1_value, "k2": k2_value,
+                                 "surface_chloride": surface_chloride,
+                                 "cover_allowance": cover_allowance,
+                                 "special_quality_control": bool(special_qc),
+                                 "design_life": design_life},
+                    "inputs": edited.fillna(0).to_dict("records"),
+                    "detail": detail.replace([float("inf")], 1e12).fillna(0).to_dict("records"),
+                    "materials": mat_res.replace([float("inf")], 1e12).fillna(0).to_dict("records"),
+                    "summary": summ,
+                }
                 try:
-                    supabase.table("saved_projects").update(
-                        {"service_life_data": {"exposure_class": exposure_class,
-                                               "mechanism": mechanism,
-                                               "summary": summ,
-                                               "materials": payload["materials"]}}
-                    ).eq("id", proj_id).execute()
-                except Exception:
-                    pass
-                st.session_state.sl_saved_flash = (
-                    "The assessment named %s has been saved against %s. You will find it in "
-                    "My Library and in the list at the top of this page."
-                    % (payload["version_name"], proj_label))
-                _clear_page_state()
-                st.rerun()
-            except Exception as e:
-                st.error("The assessment could not be saved. Create the service_life_runs "
-                         "table in Supabase using the statement in the setup notes. "
-                         "Details: %s" % e)
+                    supabase.table("service_life_runs").insert(payload).execute()
+                    try:
+                        supabase.table("saved_projects").update(
+                            {"service_life_data": {"exposure_class": exposure_class,
+                                                   "mechanism": mechanism,
+                                                   "summary": summ,
+                                                   "materials": payload["materials"]}}
+                        ).eq("id", proj_id).execute()
+                    except Exception:
+                        pass
+                    st.session_state.sl_saved_flash = (
+                        "The assessment named %s has been saved against %s. You will find it in "
+                        "My Library and in the list at the top of this page."
+                        % (payload["version_name"], proj_label))
+                    _clear_page_state()
+                    st.rerun()
+                except Exception as e:
+                    st.error("The assessment could not be saved. Create the service_life_runs "
+                             "table in Supabase using the statement in the setup notes. "
+                             "Details: %s" % e)
     else:
         st.caption("Save the project first, from Project Builder, if you want to store "
                    "this assessment and use it in the project comparison.")
@@ -1343,24 +1382,25 @@ def render_library_assessments(supabase, db, user_mixes, factors_df,
 
     labels = ["%s  (%s)" % (r.get("version_name", "unnamed"), r.get("project_name", ""))
               for r in runs]
-    pick = st.selectbox("Open an assessment:", labels, key="lib_run_pick")
+    pick = st.selectbox("Open an assessment:", ["Select an assessment"] + labels,
+                        key="lib_run_pick")
+    if pick == "Select an assessment":
+        st.info("Choose a saved assessment from the list above to see its full results.")
+        return
     run = runs[labels.index(pick)]
 
     st.markdown("### %s" % run.get("version_name", "unnamed"))
-    st.caption("Project %s, exposure class %s, %s model, saved %s."
+    st.caption("Project %s, exposure class %s, %s model."
                % (run.get("project_name", ""), run.get("exposure_class", ""),
-                  str(run.get("mechanism", "")).lower(),
-                  str(run.get("created_at", ""))[:16].replace("T", " ")))
+                  str(run.get("mechanism", "")).lower()))
 
     summ = run.get("summary") or {}
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     m1.metric("Concrete volume", "{:,.2f} m3".format(sf(summ.get("total_volume"))))
     m2.metric("Total embodied carbon",
               "{:,.3f} tonne CO2e".format(sf(summ.get("total_carbon", summ.get("total_eic")))))
     m3.metric("Sum of the material values",
               "{:,.2f}".format(sf(summ.get("sum_index", summ.get("sum_csepp")))))
-    m4.metric("Whole structure value",
-              "{:,.2f}".format(sf(summ.get("structure_index", summ.get("structure_csepp")))))
 
     mats = pd.DataFrame(run.get("materials") or [])
     if not mats.empty:
