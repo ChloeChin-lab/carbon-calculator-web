@@ -862,16 +862,23 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                    "every number stays under your control." % ", ".join(refs["_missing"]))
 
     st.markdown("#### 1. Select the assessed structure")
-    src = st.radio("Data source:", ["Saved Project", "Current Project Assessment"],
+    src = st.radio("Data source:", ["Saved Project", "Current Project"],
                    horizontal=True, key="sl_source")
 
     results_df, proj_label, proj_id = None, "", None
 
-    if src == "Current Project Assessment":
+    if src == "Current Project":
         results_df = st.session_state.get("project_results_df")
         proj_label = st.session_state.get("draft_proj_name") or "Unsaved project"
+        # This is what lets the Save button below work when you assess the
+        # project you currently have open, instead of only when you reselect
+        # it from the Saved Project dropdown: reuse the id that was recorded
+        # when that project was saved from Project Builder. If the project
+        # on screen has never actually been saved yet, this stays None and
+        # the save section further down will ask you to save it first.
+        proj_id = st.session_state.get("current_project_id")
         if results_df is None:
-            st.info("There is nothing to assess yet. Open Project Assessment, assign the "
+            st.info("There is nothing to assess yet. Open Project Builder, assign the "
                     "materials and press Calculate Project Totals, or switch the selector "
                     "above to Saved Project.")
             return
@@ -1206,7 +1213,7 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
             y=alt.Y("Material:N", sort="-x", title=""),
             tooltip=["Material", "Index"]).properties(height=alt.Step(42)),
             use_container_width=True)
-        st.caption("Carbon efficiency of each mix, in %s." % INDEX_UNITS)
+        st.caption("Carbon efficiency of each mix, in %s. Higher is better." % INDEX_UNITS)
 
     split = mat_res.melt(
         id_vars="Material",
@@ -1314,7 +1321,7 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                          "table in Supabase using the statement in the setup notes. "
                          "Details: %s" % e)
     else:
-        st.caption("Save the project first, from Project Assessment, if you want to store "
+        st.caption("Save the project first, from Project Builder, if you want to store "
                    "this assessment and use it in the project comparison.")
 
 
