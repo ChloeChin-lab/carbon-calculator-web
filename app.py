@@ -209,6 +209,9 @@ def _pack_database(xls):
         "chloride_ctl":              g("Chloride_CTL"),
         "chloride_dc":               g("Chloride_Dc"),
         "binder_mapping":            g("Binder_Mapping"),
+        "cover_requirements":        g("Cover_Requirements"),
+        "structural_class_rules":    g("Structural_Class_Rules"),
+        "column_descriptions":       g("Column_Descriptions"),
     }
 
 @st.cache_data(ttl=600, show_spinner="Loading materials database...")
@@ -233,8 +236,8 @@ def load_database():
                     continue
                 ctype = str(response.headers.get("content-type", "")).lower()
                 if "html" in ctype:
-                    errors.append("Google Sheets returned a sign-in page instead of the file. "
-                                  "The sheet is not shared as 'Anyone with the link – Viewer'.")
+                    errors.append("Google Sheets returned a sign in page instead of the file. "
+                                  "The sheet is not shared as Anyone with the link, Viewer.")
                     break
                 xls = pd.read_excel(BytesIO(response.content), sheet_name=None)
                 data = _pack_database(xls)
@@ -582,15 +585,15 @@ def database_error_screen(db):
 **Most common causes, in order:**
 
 1. **The Google Sheet is not shared publicly.** Open the sheet → Share → General access →
-   *Anyone with the link* → *Viewer*. The app downloads the file anonymously; a sheet
-   restricted to your account returns a sign-in page, not a spreadsheet.
-2. **The `GOOGLE_SHEET_ID` environment variable is missing or wrong on this server.**
-   It is the long code between `/d/` and `/edit` in the sheet URL.
+   *Anyone with the link* → *Viewer*. The app downloads the file anonymously, so a sheet
+   restricted to your account returns a sign in page instead of a spreadsheet.
+2. **The GOOGLE_SHEET_ID environment variable is missing or wrong on this server.**
+   It is the long code between /d/ and /edit in the sheet address.
 3. **A slow or blocked request.** Google occasionally rate-limits the export endpoint.
    Press Retry below; if it works on the second try, this was the cause.
 
-This is **not** a Supabase problem — you are logged in, so Supabase is working. Your Supabase
-free tier is unrelated to the spreadsheet.
+This is not a Supabase problem. You are logged in, so Supabase is working, and your Supabase
+free tier has nothing to do with the spreadsheet.
 """)
     if st.button("Retry loading the database", type="primary"):
         st.cache_data.clear()
@@ -637,11 +640,11 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #FEF5E7; padding: 20px; border-radius: 8px; border-top: 4px solid #E67E22; height: 150px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Service Life & CSEPP</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Durability engine. Carbonation and chloride design life, then CSEPP carbon efficiency.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">Durability engine. Carbonation and chloride design life, then the carbon efficiency index.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_sl", use_container_width=True):
-            st.session_state.current_page = "Service Life & CSEPP"
+            st.session_state.current_page = "Service Life and CSEPP"
             st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -650,11 +653,11 @@ def welcome_dashboard():
         st.markdown("""
         <div style="background-color: #F4ECF7; padding: 20px; border-radius: 8px; border-top: 4px solid #8E44AD; height: 150px;">
             <h3 style="color: #2C3E50; margin-top: 0;">Comparison & Analysis</h3>
-            <p style="color: #5D6D7E; font-size: 14px;">Benchmark mixes against mixes, and complete projects against each other on carbon and CSEPP.</p>
+            <p style="color: #5D6D7E; font-size: 14px;">Benchmark mixes against mixes, and complete projects against each other on carbon and carbon efficiency.</p>
         </div><br>""", unsafe_allow_html=True)
         st.markdown('<span class="btn-blue"></span>', unsafe_allow_html=True)
         if st.button("Access", key="btn_nav_cmp", use_container_width=True):
-            st.session_state.current_page = "Comparison & Analysis"
+            st.session_state.current_page = "Comparison and Analysis"
             st.rerun()
 
     with col5:
@@ -704,8 +707,8 @@ def main_application():
 
     st.sidebar.markdown("---")
     
-    nav_options = ["Materials & Mixes", "Project Assessment", "Service Life & CSEPP",
-                   "Comparison & Analysis", "My Library"]
+    nav_options = ["Materials & Mixes", "Project Assessment", "Service Life and CSEPP",
+                   "Comparison and Analysis", "My Library"]
     current_idx = nav_options.index(st.session_state.current_page) if st.session_state.current_page in nav_options else 0
     
     selected_nav = st.sidebar.radio("Navigation", nav_options, index=current_idx, label_visibility="collapsed")
@@ -793,7 +796,7 @@ def main_application():
             st.session_state.mix_mode_radio = mode
 
         st.caption("Looking for the mix comparison tool? It now lives in the "
-                   "**Comparison & Analysis** page, together with project-to-project comparison.")
+                   "Comparison and Analysis page, together with project comparison.")
         
         mix_cats = set(db["mixes"]["Category"].dropna().unique()) if not db["mixes"].empty and "Category" in db["mixes"].columns else set()
         direct_cats = set(db["direct"]["Category"].dropna().unique()) if not db["direct"].empty and "Category" in db["direct"].columns else set()
@@ -932,9 +935,9 @@ def main_application():
             
             d_name = st.session_state.get("draft_mix_name", "")
             custom_mix_name = st.text_input("Name your Custom Item:", value=d_name, placeholder="e.g., C40/50 or Recycled Steel", key=f"mix_name_input_{st.session_state.mix_reset_counter}")
-            st.caption("Tip: include the strength class in the name (e.g. 'C70/85 HSC Girder Mix'). "
-                       "The Service Life engine reads the grade straight out of the name to auto-fill "
-                       "fck, fcm and the suggested k400,l / Dc values.")
+            st.caption("Tip: include the strength class in the name, for example C70/85 HSC Girder Mix. "
+                       "The service life engine reads the grade out of the name and uses it to fill in "
+                       "the strength values and the suggested coefficients.")
             
             c_col1, c_col2 = st.columns(2)
             with c_col1:
@@ -1387,9 +1390,9 @@ def main_application():
                 
                 render_results_table_and_totals(st.session_state.project_results_df, st.session_state.project_totals)
 
-                st.info("Next step: open **Service Life & CSEPP** in the sidebar to run the "
-                        "carbonation or chloride design life check on these materials and get "
-                        "the CSEPP score.")
+                st.info("Next step: open Service Life and CSEPP in the sidebar to run the "
+                        "carbonation or chloride design life check on these materials and "
+                        "obtain the carbon efficiency index.")
                 
                 st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
                 if st.button("Save Project"):
@@ -1424,12 +1427,12 @@ def main_application():
                             st.session_state.confirm_overwrite_name = None
                             st.rerun()
 
-    elif st.session_state.current_page == "Service Life & CSEPP":
+    elif st.session_state.current_page == "Service Life and CSEPP":
         sl.render_service_life_page(
             supabase, db, user_mixes, factors_df,
             calculate_mix_carbon, calculate_project_data)
 
-    elif st.session_state.current_page == "Comparison & Analysis":
+    elif st.session_state.current_page == "Comparison and Analysis":
         cmp_mod.render_comparison_page(
             supabase, db, user_mixes, factors_df, all_available_mixes,
             calculate_mix_carbon, calculate_project_data,
@@ -1470,9 +1473,9 @@ def main_application():
                             sl_summary = sl_data.get("summary") or {}
                             if sl_summary:
                                 st.caption(
-                                    f"Service life assessed — exposure {sl_data.get('exposure_class','?')} | "
-                                    f"Σ CSEPP {safe_float(sl_summary.get('sum_csepp')):,.2f} | "
-                                    f"Structure CSEPP {safe_float(sl_summary.get('structure_csepp')):,.2f} MPa·yr/tCO2e")
+                                    f"Service life assessed, exposure {sl_data.get('exposure_class','?')} | "
+                                    f"Sum of material values {safe_float(sl_summary.get('sum_csepp')):,.2f} | "
+                                    f"Whole structure value {safe_float(sl_summary.get('structure_csepp')):,.2f}")
                             
                             draft_comps = []
                             raw_data = p.get("component_data", [])
@@ -1604,11 +1607,11 @@ def main_application():
                             cem, add, found = sl.autofill_binder(c_mix_name, db, user_mixes, factors_df, refs)
                             if s_props["Grade"] or found:
                                 d_col1, d_col2, d_col3 = st.columns(3)
-                                d_col1.metric("Detected Grade", s_props["Grade"] or "—")
-                                d_col2.metric("fck,cyl", f"{s_props['fck_cyl']:,.0f} MPa" if s_props["fck_cyl"] else "—")
-                                d_col3.metric("Total Binder", f"{cem + add:,.1f} kg/m³" if found else "—")
-                                st.caption("These are the values the Service Life & CSEPP page will "
-                                           "auto-fill for this mix. All of them stay editable there.")
+                                d_col1.metric("Detected grade", s_props["Grade"] or "not recognised")
+                                d_col2.metric("Characteristic cylinder strength", f"{s_props['fck_cyl']:,.0f} MPa" if s_props["fck_cyl"] else "not recognised")
+                                d_col3.metric("Total binder content", f"{cem + add:,.1f} kg/m3" if found else "not known")
+                                st.caption("These are the values the Service Life and CSEPP page will fill in "
+                                           "for this mix. All of them can still be edited there.")
                             
                             chart_components_mass = {}
                             chart_components_carbon = {}
