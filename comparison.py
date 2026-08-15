@@ -176,8 +176,8 @@ def render_mix_comparison(db, user_mixes, factors_df, all_available_mixes,
 def render_project_comparison(supabase, db, user_mixes, factors_df,
                               calc_mix_carbon, calculate_project_data):
     st.markdown("#### Compare Projects")
-    st.info("Select two or more saved projects to benchmark their embodied carbon, material "
-            "split and — where service life has been assessed — both CSEPP metrics.")
+    st.info("Select two or more saved projects to compare their embodied carbon, material "
+            "split, and both carbon efficiency values where the service life has been assessed.")
 
     try:
         res = supabase.table("saved_projects").select("*") \
@@ -221,18 +221,19 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
         if summ:
             row["Exposure"] = sl.get("exposure_class", "")
             row["Governing tsl (yr)"] = sf(summ.get("governing_tsl"))
-            row["Σ CSEPP"] = sf(summ.get("sum_csepp"))
-            row["Structure CSEPP"] = sf(summ.get("structure_csepp"))
+            row["Sum of material values"] = sf(summ.get("sum_csepp"))
+            row["Whole structure value"] = sf(summ.get("structure_csepp"))
             row["Durability"] = "All pass" if summ.get("all_pass") else \
                 f"{int(sf(summ.get('n_pass')))}/{int(sf(summ.get('n_materials')))} pass"
             for r in (sl.get("materials") or sl.get("results") or []):
                 csepp_rows.append({"Project": name, "Material": r.get("Material"),
-                                   "CSEPP": sf(r.get("CSEPP (MPa·yr/tCO2e)"))})
+                                   "Carbon efficiency index": sf(r.get("CSEPP (MPa.year per tonne CO2e)",
+                                                                     r.get("CSEPP (MPa·yr/tCO2e)")))})
         else:
             row["Exposure"] = "not assessed"
             row["Governing tsl (yr)"] = float("nan")
-            row["Σ CSEPP"] = float("nan")
-            row["Structure CSEPP"] = float("nan")
+            row["Sum of material values"] = float("nan")
+            row["Whole structure value"] = float("nan")
             row["Durability"] = "-"
         summary_rows.append(row)
 
@@ -251,7 +252,7 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
         "Total Volume (m³)": "{:,.2f}", "Total Mass (t)": "{:,.2f}",
         "Total GWP100 (tCO2e)": "{:,.3f}", "Carbon Intensity (kgCO2e/m³)": "{:,.2f}",
         "Governing tsl (yr)": "{:,.0f}",
-        "Σ CSEPP": "{:,.2f}", "Structure CSEPP": "{:,.2f}"}, na_rep="-"),
+        "Sum of material values": "{:,.2f}", "Whole structure value": "{:,.2f}"}, na_rep="-"),
         use_container_width=True)
 
     best_row = sum_df.sort_values("Total GWP100 (tCO2e)").iloc[0]
@@ -259,24 +260,24 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
                f"{best_row['Total GWP100 (tCO2e)']:,.3f} tCO2e "
                f"({best_row['Carbon Intensity (kgCO2e/m³)']:,.2f} kgCO2e/m³).")
 
-    valid = sum_df.dropna(subset=["Structure CSEPP"])
+    valid = sum_df.dropna(subset=["Whole structure value"])
     if not valid.empty:
-        top_s = valid.sort_values("Structure CSEPP", ascending=False).iloc[0]
-        top_sum = valid.sort_values("Σ CSEPP", ascending=False).iloc[0]
+        top_s = valid.sort_values("Whole structure value", ascending=False).iloc[0]
+        top_sum = valid.sort_values("Sum of material values", ascending=False).iloc[0]
         st.success(
-            f"**Best carbon-efficiency of structural performance (Structure CSEPP):** "
-            f"{top_s['Project']} at {top_s['Structure CSEPP']:,.2f} MPa·yr/tonne CO2e. "
-            f"**Highest Σ CSEPP:** {top_sum['Project']} at {top_sum['Σ CSEPP']:,.2f}. "
-            f"Structure CSEPP is the fair like-for-like metric across designs of different "
-            f"size or with a different number of mixes; Σ CSEPP is the per-material total and "
-            f"grows with the number of materials.")
+            f"**Best carbon efficiency for the whole structure:** "
+            f"{top_s['Project']} at {top_s['Whole structure value']:,.2f} megapascal years per tonne CO2e. "
+            f"**Highest sum of material values:** {top_sum['Project']} at {top_sum['Sum of material values']:,.2f}. "
+            f"The whole structure value is the fair comparison across designs that differ in "
+            f"size or in the number of mixes. The sum of the material values grows with the "
+            f"number of materials, so use it within a family of similar designs.")
     else:
-        st.warning("None of the selected projects has saved service life data yet, so CSEPP "
-                   "cannot be compared. Run the **Service Life & CSEPP** page for each project "
-                   "and press *Save*.")
+        st.warning("None of the selected projects has saved service life data yet, so "
+                   "cannot be compared. Run the Service Life and CSEPP page for each project "
+                   "and press Save.")
 
     t1, t2, t3, t4 = st.tabs(["Carbon totals", "Material split",
-                              "CSEPP by material", "CSEPP metrics"])
+                              "Efficiency by material", "The two efficiency values"])
     with t1:
         chart = alt.Chart(sum_df).mark_bar(cornerRadiusEnd=4).encode(
             x=alt.X("Total GWP100 (tCO2e):Q", title="Total GWP100 (tonne CO2e)"),
@@ -300,32 +301,33 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
     with t3:
         if csepp_rows:
             cd = pd.DataFrame(csepp_rows)
-            cd = cd[cd["CSEPP"] > 0]
+            cd = cd[cd["Carbon efficiency index"] > 0]
             if not cd.empty:
                 grouped = alt.Chart(cd).mark_bar().encode(
-                    x=alt.X("CSEPP:Q", title="CSEPP (MPa·yr / tonne CO2e)"),
+                    x=alt.X("Carbon efficiency index:Q",
+                            title="Carbon efficiency index, megapascal years per tonne CO2e"),
                     y=alt.Y("Material:N", title=""),
                     color=alt.Color("Project:N"), yOffset="Project:N",
-                    tooltip=["Project", "Material", "CSEPP"]).properties(height=alt.Step(30))
+                    tooltip=["Project", "Material", "Carbon efficiency index"]).properties(height=alt.Step(30))
                 st.altair_chart(grouped, use_container_width=True)
             else:
-                st.info("No material passed the durability gate in the saved runs.")
+                st.info("No material passed the durability check in the saved results.")
         else:
-            st.info("No per-material CSEPP data saved for the selected projects.")
+            st.info("No carbon efficiency results have been saved for the selected projects.")
     with t4:
         if not valid.empty:
-            melt = valid.melt(id_vars="Project", value_vars=["Σ CSEPP", "Structure CSEPP"],
+            melt = valid.melt(id_vars="Project", value_vars=["Sum of material values", "Whole structure value"],
                               var_name="Metric", value_name="Value")
             side = alt.Chart(melt).mark_bar().encode(
-                x=alt.X("Value:Q", title="CSEPP (MPa·yr / tonne CO2e)"),
+                x=alt.X("Value:Q", title="Carbon efficiency index, megapascal years per tonne CO2e"),
                 y=alt.Y("Project:N", title=""),
                 color=alt.Color("Metric:N", legend=alt.Legend(orient="bottom")),
                 yOffset="Metric:N",
                 tooltip=["Project", "Metric", "Value"]).properties(height=alt.Step(40))
             st.altair_chart(side, use_container_width=True)
-            st.caption("Both metrics side by side. They differ in magnitude by construction — "
-                       "Σ CSEPP adds one term per material, Structure CSEPP collapses the "
-                       "structure into a single equivalent material.")
+            st.caption("Both values shown side by side. They differ in size by construction. The sum "
+                       "of the material values adds one term for every material, while the whole "
+                       "structure value treats the structure as a single equivalent material.")
         else:
             st.info("No service life data available for the selected projects.")
 
