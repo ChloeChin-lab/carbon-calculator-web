@@ -869,12 +869,12 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
         # This is what lets the Save button below work when you assess the
         # project you currently have open, instead of only when you reselect
         # it from the Saved Project dropdown: reuse the id that was recorded
-        # when that project was saved from Project Builder. If the project
+        # when that project was saved from Project Design. If the project
         # on screen has never actually been saved yet, this stays None and
         # the save section further down will ask you to save it first.
         proj_id = st.session_state.get("current_project_id")
         if results_df is None:
-            st.info("There is nothing to assess yet. Open Project Builder, assign the "
+            st.info("There is nothing to assess yet. Open Project Design, assign the "
                     "materials and press Calculate Project Totals, or switch the selector "
                     "above to Saved Project.")
             return
@@ -1390,7 +1390,7 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                              "table in Supabase using the statement in the setup notes. "
                              "Details: %s" % e)
     else:
-        st.caption("Save the project first, from Project Builder, if you want to store "
+        st.caption("Save the project first, from Project Design, if you want to store "
                    "this assessment and use it in the project comparison.")
 
 
