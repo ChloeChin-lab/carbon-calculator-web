@@ -158,7 +158,7 @@ def render_mix_comparison(db, user_mixes, factors_df, all_available_mixes,
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_csv, col_pdf, _ = st.columns([1, 1, 1.5])
-    col_csv.download_button("📄 Download Data (CSV)",
+    col_csv.download_button("Download Data (CSV)",
                             data=comp_df.to_csv(index=False).encode("utf-8"),
                             file_name="material_comparison.csv", mime="text/csv",
                             use_container_width=True)
@@ -330,7 +330,7 @@ def render_project_comparison(supabase, db, user_mixes, factors_df,
         else:
             st.info("No service life data available for the selected projects.")
 
-    st.download_button("📄 Download project comparison (CSV)",
+    st.download_button("Download project comparison (CSV)",
                        data=sum_df.to_csv(index=False).encode("utf-8"),
                        file_name="project_comparison.csv", mime="text/csv")
 
