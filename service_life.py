@@ -5,23 +5,23 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-SEC_PER_YEAR = 365.25 * 24 * 3600.0
+SECONDS_PER_YEAR = 365.25 * 24 * 3600.0
 
-# Airborne-chloride model constants (see notes at the bottom of this file)
-CS_C1_DEFAULT = 0.6      # calibration constant of C_air = C1 * d^-n
-CS_N_DEFAULT = 0.6       # distance decay exponent
-CS_A_DEFAULT = 1.5       # airborne -> surface concentration conversion, factor
-CS_B_DEFAULT = 0.4       # airborne -> surface concentration conversion, exponent
+# Airborne chloride model constants. See the note at the foot of this file.
+CS_C1_DEFAULT = 0.6
+CS_N_DEFAULT = 0.6
+CS_A_DEFAULT = 1.5
+CS_B_DEFAULT = 0.4
 
 ELEMENT_TYPES = ["Reinforced", "Prestressed"]
-CLASS_OPTIONS = ["Auto", "S1", "S2", "S3", "S4", "S5", "S6"]
+CLASS_OPTIONS = ["Automatic", "S1", "S2", "S3", "S4", "S5", "S6", "Not applicable"]
 
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # small helpers
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def sf(val, default=0.0):
-    """Safe float conversion (blank / text / NaN -> default)."""
+    """Convert safely to a number. Blanks, text and missing values give the default."""
     if val is None:
         return default
     try:
@@ -36,7 +36,7 @@ def sf(val, default=0.0):
 
 
 def parse_grade(name):
-    """'Custom: C32/40 Deck' -> (32, 40). Returns (None, None) if not a grade."""
+    """Read a concrete grade out of a material name. C32/40 gives (32, 40)."""
     m = re.search(r"C\s*(\d{2,3})\s*/\s*(\d{2,3})", str(name), re.IGNORECASE)
     if m:
         return int(m.group(1)), int(m.group(2))
@@ -44,7 +44,7 @@ def parse_grade(name):
 
 
 def inv_erf(y):
-    """Inverse error function (no scipy dependency)."""
+    """Inverse of the error function, written out so that scipy is not needed."""
     if y <= -1.0:
         return -float("inf")
     if y >= 1.0:
@@ -68,70 +68,9 @@ def inv_erf(y):
     return x
 
 
-# ----------------------------------------------------------------------------
-# EN 1992-1-1 structural class and minimum durability cover
-# ----------------------------------------------------------------------------
-# Column groups used by Tables 4.3N / 4.4N / 4.5N
-_EXP_COL = {"X0": 0, "XC1": 1, "XC2": 2, "XC3": 2, "XC4": 3,
-            "XD1": 4, "XS1": 4, "XD2": 5, "XS2": 5, "XD3": 6, "XS3": 6}
-
-# Table 4.4N - cmin,dur for reinforcing steel (mm), rows S1..S6
-_COVER_RC = {
-    1: [10, 10, 10, 15, 20, 25, 30],
-    2: [10, 10, 15, 20, 25, 30, 35],
-    3: [10, 10, 20, 25, 30, 35, 40],
-    4: [10, 15, 25, 30, 35, 40, 45],
-    5: [15, 20, 30, 35, 40, 45, 50],
-    6: [20, 25, 35, 40, 45, 50, 55],
-}
-# Table 4.5N - cmin,dur for prestressing steel = Table 4.4N + 10 mm
-_COVER_PS = {s: [v + 10 for v in row] for s, row in _COVER_RC.items()}
-
-# Table 4.3N - strength class at or above which the structural class drops by 1
-_STRENGTH_REDUCTION = {"X0": 30, "XC1": 30, "XC2": 35, "XC3": 35, "XC4": 40,
-                       "XD1": 40, "XS1": 40, "XD2": 40, "XS2": 45,
-                       "XD3": 45, "XS3": 45}
-
-
-def structural_class(exposure_class, fck_cyl, tsl_years, slab_geometry=False,
-                     special_qc=False):
-    """
-    EN 1992-1-1 cl. 4.4.1.2(5) / Table 4.3N.
-    Base class S4 (50-year design life), then:
-      +2  design life of 100 years
-      -1  strength class at or above the Table 4.3N threshold
-      -1  member with slab geometry
-      -1  special quality control of the concrete production ensured
-    """
-    s = 4
-    if sf(tsl_years, 50) >= 100:
-        s += 2
-    thr = _STRENGTH_REDUCTION.get(str(exposure_class).upper())
-    if thr is not None and sf(fck_cyl) >= thr:
-        s -= 1
-    if slab_geometry:
-        s -= 1
-    if special_qc:
-        s -= 1
-    return max(1, min(6, s))
-
-
-def cmin_dur(exposure_class, s_class, element_type="Reinforced"):
-    """Minimum durability cover from EN 1992-1-1 Table 4.4N / 4.5N (mm)."""
-    col = _EXP_COL.get(str(exposure_class).upper())
-    if col is None:
-        return 0.0
-    table = _COVER_PS if str(element_type).lower().startswith("pre") else _COVER_RC
-    try:
-        s = int(str(s_class).replace("S", ""))
-    except (ValueError, TypeError):
-        s = 4
-    return float(table.get(max(1, min(6, s)), table[4])[col])
-
-
-# ----------------------------------------------------------------------------
-# reference data (Google Sheet tabs, with built-in fallbacks)
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# safety net tables, used only when a worksheet is missing
+# ---------------------------------------------------------------------------
 def _fallback_strength_table():
     d = {20: 5, 21: 5, 22: 5, 23: 5, 24: 5, 25: 5, 26: 5, 27: 6, 28: 6,
          29: 7, 30: 7, 31: 8, 32: 8, 33: 9, 34: 9}
@@ -142,7 +81,7 @@ def _fallback_strength_table():
     rows = []
     for fck in range(20, 221):
         cube = fck + d.get(fck, 15)
-        rows.append({"Grade": f"C{fck}/{cube}", "fck_cyl_MPa": fck,
+        rows.append({"Grade": "C%d/%d" % (fck, cube), "fck_cyl_MPa": fck,
                      "fck_cube_MPa": cube, "fcm_cyl_MPa": fck + 8,
                      "fcm_cube_MPa": cube + 8})
     return pd.DataFrame(rows)
@@ -151,37 +90,37 @@ def _fallback_strength_table():
 FALLBACK_EXPOSURE = pd.DataFrame([
     ("XC1", "Carbonation", "Dry or permanently wet", "CARBONATION"),
     ("XC2", "Carbonation", "Wet, rarely dry", "CARBONATION"),
-    ("XC3", "Carbonation", "Moderate humidity (sheltered from rain)", "CARBONATION"),
-    ("XC4", "Carbonation", "Cyclic wet and dry (exposed to rain)", "CARBONATION"),
-    ("XD1", "De-icing Cl-", "Moderate humidity, airborne chlorides (not sea water)", "CHLORIDE"),
-    ("XD2", "De-icing Cl-", "Wet, rarely dry", "CHLORIDE"),
-    ("XD3", "De-icing Cl-", "Cyclic wet and dry (de-icing spray, bridge decks)", "CHLORIDE"),
-    ("XS1", "Marine Cl-", "Airborne salt, no direct contact with sea water", "CHLORIDE"),
-    ("XS2", "Marine Cl-", "Permanently submerged in sea water", "CHLORIDE"),
-    ("XS3", "Marine Cl-", "Tidal, splash and spray zones", "CHLORIDE"),
+    ("XC3", "Carbonation", "Moderate humidity, sheltered from rain", "CARBONATION"),
+    ("XC4", "Carbonation", "Cyclic wet and dry, exposed to rain", "CARBONATION"),
+    ("XD1", "Chloride other than sea water", "Moderate humidity", "CHLORIDE"),
+    ("XD2", "Chloride other than sea water", "Wet, rarely dry", "CHLORIDE"),
+    ("XD3", "Chloride other than sea water", "Cyclic wet and dry, de icing spray", "CHLORIDE"),
+    ("XS1", "Sea water chloride", "Airborne salt, no direct contact with sea water", "CHLORIDE"),
+    ("XS2", "Sea water chloride", "Permanently submerged in sea water", "CHLORIDE"),
+    ("XS3", "Sea water chloride", "Tidal, splash and spray zones", "CHLORIDE"),
 ], columns=["Class", "Group", "Description", "Mechanism"])
 
-FALLBACK_K1 = pd.DataFrame([
+FALLBACK_LOCATION = pd.DataFrame([
     ("Coastal", 0.90, "Literature value"),
-    ("Rural", 1.00, "Reference / baseline"),
+    ("Rural", 1.00, "Reference baseline"),
     ("Suburban", 1.30, "Literature value"),
     ("Urban", 1.40, "Literature value"),
     ("Internal", 2.00, "Enclosed environment"),
-    ("Kuala Lumpur city centre (2019)", 1.06, "436 ppm / 410 ppm = 1.06"),
+    ("Kuala Lumpur city centre, 2019", 1.06, "436 ppm against a 410 ppm baseline"),
 ], columns=["Location_Type", "k1_default", "Note"])
 
-FALLBACK_K400_DEFAULTS = pd.DataFrame([
-    ("C140/155", "UHPC", 0.50, "Adopted design value for UHPC"),
-    ("C70/85", "HSC", 2.00, "Adopted; vertical web elements critical"),
-    ("C32/40", "NSC", 3.00, "Typical C32/40 literature value at 400 ppm, sheltered"),
-    ("C40/50", "NSC", 3.00, "Assumed as C32/40"),
+FALLBACK_K400 = pd.DataFrame([
+    ("C140/155", "UHPC", 0.50, "Adopted design value"),
+    ("C70/85", "HSC", 2.00, "Adopted design value"),
+    ("C32/40", "NSC", 3.00, "Adopted design value"),
+    ("C40/50", "NSC", 3.00, "Adopted design value"),
 ], columns=["Grade", "Concrete_Type", "k400_default", "Note"])
 
 FALLBACK_DC = pd.DataFrame([
-    ("C32/40", 10.0, "NSC case study"),
-    ("C40/50", 6.0, "NSC case study"),
-    ("C70/85", 4.5, "HSC case study"),
-    ("C140/155", 0.1, "UHPC, NF P 18-470"),
+    ("C32/40", 10.0, "Case study value"),
+    ("C40/50", 6.0, "Case study value"),
+    ("C70/85", 4.5, "Case study value"),
+    ("C140/155", 0.1, "NF P 18-470"),
 ], columns=["Grade", "Dc_x1e6_mm2_s", "Source"])
 
 FALLBACK_BINDER_MAP = pd.DataFrame([
@@ -191,28 +130,117 @@ FALLBACK_BINDER_MAP = pd.DataFrame([
     ("ADDITIVE", "Microsilica"),
 ], columns=["Role", "Component_Keyword"])
 
+_FB_COVER_RC = {
+    1: [10, 10, 10, 15, 20, 25, 30], 2: [10, 10, 15, 20, 25, 30, 35],
+    3: [10, 10, 20, 25, 30, 35, 40], 4: [10, 15, 25, 30, 35, 40, 45],
+    5: [15, 20, 30, 35, 40, 45, 50], 6: [20, 25, 35, 40, 45, 50, 55],
+}
+_FB_EXP_COL = {"X0": 0, "XC1": 1, "XC2": 2, "XC3": 2, "XC4": 3,
+               "XD1": 4, "XS1": 4, "XD2": 5, "XS2": 5, "XD3": 6, "XS3": 6}
+
+
+def _fallback_cover():
+    rows = []
+    for s in range(1, 7):
+        for exp, col in _FB_EXP_COL.items():
+            rows.append(("S%d" % s, exp, "Reinforced", _FB_COVER_RC[s][col]))
+            rows.append(("S%d" % s, exp, "Prestressed", _FB_COVER_RC[s][col] + 10))
+    return pd.DataFrame(rows, columns=["Structural_Class", "Exposure_Class",
+                                       "Element_Type", "cmin_dur_mm"])
+
+
+def _fallback_rules():
+    rows = [("BASE", "ALL", None, 4, ""),
+            ("DESIGN_LIFE", "ALL", 100, 2, ""),
+            ("SLAB", "ALL", None, -1, ""),
+            ("QUALITY_CONTROL", "ALL", None, -1, "")]
+    thr = {"X0": 30, "XC1": 30, "XC2": 35, "XC3": 35, "XC4": 40, "XD1": 40,
+           "XS1": 40, "XD2": 40, "XS2": 45, "XD3": 45, "XS3": 45}
+    for exp, t in thr.items():
+        rows.append(("STRENGTH", exp, t, -1, ""))
+    return pd.DataFrame(rows, columns=["Rule_Type", "Exposure_Class", "Parameter",
+                                       "Class_Adjustment", "Description"])
+
+
+FALLBACK_DESCRIPTIONS = pd.DataFrame([], columns=["Applies_To", "Column_Name", "Description"])
+
 
 def get_refs(db):
-    """Pull the reference tabs out of the loaded database, with fallbacks."""
-    def pick(key, fallback):
+    """Collect the reference worksheets, noting which ones fell back to the safety net."""
+    missing = []
+
+    def pick(key, fallback, label):
         v = db.get(key) if isinstance(db, dict) else None
         if isinstance(v, pd.DataFrame) and not v.empty:
             return v
+        if label:
+            missing.append(label)
         return fallback
 
-    return {
-        "strength": pick("strength_classes", _fallback_strength_table()),
-        "k400_lit": pick("carbonation_k400", pd.DataFrame()),
-        "k400_def": pick("carbonation_k400_defaults", FALLBACK_K400_DEFAULTS),
-        "k1": pick("location_k1", FALLBACK_K1),
-        "exposure": pick("exposure_classes", FALLBACK_EXPOSURE),
-        "dc": pick("chloride_dc", FALLBACK_DC),
-        "binder_map": pick("binder_mapping", FALLBACK_BINDER_MAP),
+    refs = {
+        "strength": pick("strength_classes", _fallback_strength_table(), "Strength_Classes"),
+        "k400_lit": pick("carbonation_k400", pd.DataFrame(), ""),
+        "k400_def": pick("carbonation_k400_defaults", FALLBACK_K400, "Carbonation_k400_Defaults"),
+        "location": pick("location_k1", FALLBACK_LOCATION, "Location_k1"),
+        "exposure": pick("exposure_classes", FALLBACK_EXPOSURE, "Exposure_Classes"),
+        "dc": pick("chloride_dc", FALLBACK_DC, "Chloride_Dc"),
+        "binder_map": pick("binder_mapping", FALLBACK_BINDER_MAP, "Binder_Mapping"),
+        "cover": pick("cover_requirements", _fallback_cover(), "Cover_Requirements"),
+        "rules": pick("structural_class_rules", _fallback_rules(), "Structural_Class_Rules"),
+        "descriptions": pick("column_descriptions", FALLBACK_DESCRIPTIONS, "Column_Descriptions"),
     }
+    refs["_missing"] = missing
+    return refs
 
 
+# ---------------------------------------------------------------------------
+# structural class and minimum durability cover, driven by the spreadsheet
+# ---------------------------------------------------------------------------
+def structural_class(exposure_class, fck_cyl, design_life_years, slab_geometry,
+                     special_quality_control, rules_df):
+    """Work out the structural class by applying the rules held in the spreadsheet."""
+    exp = str(exposure_class).upper()
+    s = 4
+    base = rules_df[rules_df["Rule_Type"].astype(str).str.upper() == "BASE"]
+    if not base.empty:
+        s = int(sf(base.iloc[0]["Class_Adjustment"], 4))
+
+    for _, r in rules_df.iterrows():
+        rule = str(r.get("Rule_Type", "")).upper()
+        scope = str(r.get("Exposure_Class", "ALL")).upper()
+        if scope not in ("ALL", exp):
+            continue
+        param = sf(r.get("Parameter"), 0.0)
+        adj = int(sf(r.get("Class_Adjustment"), 0))
+        if rule == "DESIGN_LIFE" and sf(design_life_years, 50) >= param > 0:
+            s += adj
+        elif rule == "STRENGTH" and sf(fck_cyl) >= param > 0:
+            s += adj
+        elif rule == "SLAB" and slab_geometry:
+            s += adj
+        elif rule == "QUALITY_CONTROL" and special_quality_control:
+            s += adj
+    return max(1, min(6, s))
+
+
+def minimum_durability_cover(exposure_class, class_label, element_type, cover_df):
+    """Look the minimum durability cover up in the spreadsheet."""
+    if str(class_label).lower().startswith("not"):
+        return 0.0
+    hit = cover_df[
+        (cover_df["Structural_Class"].astype(str).str.upper() == str(class_label).upper())
+        & (cover_df["Exposure_Class"].astype(str).str.upper() == str(exposure_class).upper())
+        & (cover_df["Element_Type"].astype(str).str.lower() == str(element_type).lower())]
+    if hit.empty:
+        return 0.0
+    return sf(hit.iloc[0]["cmin_dur_mm"])
+
+
+# ---------------------------------------------------------------------------
+# strength lookup
+# ---------------------------------------------------------------------------
 def get_strength(material_name, refs, grade_override=None):
-    """Return fck,cyl / fck,cube / fcm,cyl / fcm,cube for a material name or grade."""
+    """Return the strength values for a material name or an explicit grade."""
     grade = grade_override if grade_override else material_name
     tbl = refs["strength"]
     out = {"Grade": "", "fck_cyl": 0.0, "fck_cube": 0.0, "fcm_cyl": 0.0, "fcm_cube": 0.0}
@@ -221,7 +249,7 @@ def get_strength(material_name, refs, grade_override=None):
     if fck is None:
         return out
 
-    out["Grade"] = f"C{fck}/{cube}"
+    out["Grade"] = "C%d/%d" % (fck, cube)
     if isinstance(tbl, pd.DataFrame) and "fck_cyl_MPa" in tbl.columns:
         hit = tbl[tbl["fck_cyl_MPa"].apply(sf) == float(fck)]
         if not hit.empty:
@@ -236,9 +264,9 @@ def get_strength(material_name, refs, grade_override=None):
     return out
 
 
-# ----------------------------------------------------------------------------
-# binder content auto-fill
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# binder content, filled in from the mix design
+# ---------------------------------------------------------------------------
 def _role_of(component_name, binder_map):
     n = str(component_name).strip().lower()
     if not n:
@@ -252,7 +280,7 @@ def _role_of(component_name, binder_map):
 
 
 def autofill_binder(material_name, db, user_mixes, factors_df, refs):
-    """Returns (cement_kg_m3, additive_kg_m3, found)."""
+    """Return the cement content, the additive content and whether either was found."""
     bmap = refs["binder_map"]
     cement, additive, found = 0.0, 0.0, False
 
@@ -307,33 +335,30 @@ def autofill_binder(material_name, db, user_mixes, factors_df, refs):
     return cement, additive, found
 
 
-# ----------------------------------------------------------------------------
-# k400 / Dc auto-fill
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# coefficient lookups
+# ---------------------------------------------------------------------------
 def _nearest_by_grade(table, grade_col, value_col, grade_label, fck):
     exact = table[table[grade_col].astype(str).str.strip().str.upper()
                   == str(grade_label).strip().upper()]
     if not exact.empty:
-        return sf(exact.iloc[0][value_col]), "database"
+        return sf(exact.iloc[0][value_col]), True
     tmp = table.copy()
     tmp["_f"] = tmp[grade_col].apply(lambda g: parse_grade(g)[0] or 0)
     tmp["_d"] = (tmp["_f"] - sf(fck)).abs()
     tmp = tmp.sort_values("_d")
     if tmp.empty:
-        return 0.0, "not found"
-    return sf(tmp.iloc[0][value_col]), f"est. from {tmp.iloc[0][grade_col]}"
+        return 0.0, False
+    return sf(tmp.iloc[0][value_col]), False
 
 
-def default_k400(grade_label, fck_cyl, fcm_cyl, refs):
-    """
-    Adopted design k400,l.  The Carbonation_k400_Defaults tab is authoritative;
-    the literature tab is only consulted when that tab does not know the grade.
-    """
+def default_carbonation_coefficient(grade_label, fck_cyl, fcm_cyl, refs):
+    """The adopted reference carbonation coefficient held in the spreadsheet."""
     d = refs["k400_def"]
     if isinstance(d, pd.DataFrame) and not d.empty and "k400_default" in d.columns:
-        val, src = _nearest_by_grade(d, "Grade", "k400_default", grade_label, fck_cyl)
-        if src != "not found":
-            return round(val, 3), src
+        val, _ = _nearest_by_grade(d, "Grade", "k400_default", grade_label, fck_cyl)
+        if val > 0:
+            return round(val, 3)
     lit = refs["k400_lit"]
     if isinstance(lit, pd.DataFrame) and not lit.empty and "k400" in lit.columns:
         tmp = lit.copy()
@@ -343,50 +368,51 @@ def default_k400(grade_label, fck_cyl, fcm_cyl, refs):
         vals = sorted(sf(v) for v in tmp["k400"].tolist())
         if vals:
             n = len(vals)
-            med = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2.0
-            return round(med, 3), "literature median"
-    return 0.0, "not found"
+            return round(vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2.0, 3)
+    return 0.0
 
 
-def default_dc(grade_label, fck_cyl, refs):
+def default_diffusion_coefficient(grade_label, fck_cyl, refs):
     d = refs["dc"]
     if not isinstance(d, pd.DataFrame) or d.empty:
-        return 0.0, "not found"
-    return _nearest_by_grade(d, "Grade", "Dc_x1e6_mm2_s", grade_label, fck_cyl)
+        return 0.0
+    val, _ = _nearest_by_grade(d, "Grade", "Dc_x1e6_mm2_s", grade_label, fck_cyl)
+    return val
 
 
-# ----------------------------------------------------------------------------
-# core physics
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# the physics
+# ---------------------------------------------------------------------------
 def carbonation_coefficient(k400, k1, k2):
-    """k = k400,l * sqrt(k1 * k2)   [mm/year^0.5]"""
+    """Site carbonation coefficient, in millimetres per square root of a year."""
     return sf(k400) * math.sqrt(max(sf(k1) * sf(k2), 0.0))
 
 
 def carbonation_life(cover_mm, k):
-    """Xc(t) = k*sqrt(t)  ->  t = (X/k)^2  [years]."""
+    """Years until the carbonation front reaches the steel."""
     if sf(k) <= 0:
         return float("inf")
     return (sf(cover_mm) / sf(k)) ** 2
 
 
-def cs_air_from_distance(d_km, c1=CS_C1_DEFAULT, n=CS_N_DEFAULT,
-                         a=CS_A_DEFAULT, b=CS_B_DEFAULT):
+def surface_chloride_from_distance(d_km, c1=CS_C1_DEFAULT, n=CS_N_DEFAULT,
+                                   a=CS_A_DEFAULT, b=CS_B_DEFAULT):
     """
-    Surface chloride concentration from distance to the coastline [kg/m3].
-        C_air = c1 * d^-n            (airborne salt, d in km)
-        Cs    = a * (C_air)^b        (airborne -> concrete surface)
-    Defaults reproduce Cs(d=0.001 km)=6.417 and Cs(d=10 km)=0.704 kg/m3.
+    Surface chloride concentration in kilogrammes per cubic metre, from the
+    distance to the coastline in kilometres. The airborne salt decays as
+    c1 times distance to the power of minus n, and the surface concentration
+    follows as a times that value to the power of b. With the defaults the
+    model gives 6.417 at 1 metre and 0.704 at 10 kilometres.
     """
     d = max(sf(d_km), 1e-6)
     return a * ((c1 * (d ** (-n))) ** b)
 
 
 def chloride_life(cover_mm, dc_e6, cx, cs):
-    """Returns (t_years, erf_Y, Y, status)."""
+    """Years until the chloride threshold reaches the steel."""
     cs = sf(cs); cx = sf(cx)
     if cs <= 0:
-        return float("nan"), float("nan"), float("nan"), "NO_CS"
+        return float("nan"), float("nan"), float("nan"), "NO_SURFACE"
     if cx >= cs:
         return float("inf"), 0.0, float("inf"), "NOT_CRITICAL"
     erf_y = 1.0 - cx / cs
@@ -394,21 +420,21 @@ def chloride_life(cover_mm, dc_e6, cx, cs):
     da = sf(dc_e6) * 1e-6
     if da <= 0 or y <= 0 or math.isinf(y):
         return float("inf"), erf_y, y, "NOT_CRITICAL"
-    return (sf(cover_mm) ** 2) / (4.0 * da * y * y) / SEC_PER_YEAR, erf_y, y, "OK"
+    return (sf(cover_mm) ** 2) / (4.0 * da * y * y) / SECONDS_PER_YEAR, erf_y, y, "OK"
 
 
-def csepp(fck, tsl, eic_tonne):
-    """CSEPP = fck * tsl / EIC   [MPa.yr / tonne CO2e]"""
-    if sf(eic_tonne) <= 0:
+def carbon_efficiency_index(fck, design_life, embodied_carbon_tonnes):
+    """Strength times credited life divided by embodied carbon."""
+    if sf(embodied_carbon_tonnes) <= 0:
         return float("nan")
-    return sf(fck) * sf(tsl) / sf(eic_tonne)
+    return sf(fck) * sf(design_life) / sf(embodied_carbon_tonnes)
 
 
-# ----------------------------------------------------------------------------
-# project grouping and EIC allocation
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# grouping and carbon allocation
+# ---------------------------------------------------------------------------
 def group_component_materials(results_df, db, user_mixes, factors_df, calc_mix_carbon):
-    """One row per COMPONENT x MATERIAL pair, with Volume / Mass / GWP / EIC."""
+    """One row for every combination of component and material."""
     if results_df is None or not isinstance(results_df, pd.DataFrame) or results_df.empty:
         return pd.DataFrame()
 
@@ -435,7 +461,8 @@ def group_component_materials(results_df, db, user_mixes, factors_df, calc_mix_c
         rows.append({
             "Component": r["Component"], "Material": name,
             "Density (kg/m³)": density, "Volume (m³)": vol, "Mass (kg)": mass,
-            "GWP100 (kgCO2e)": gwp, "EIC (tonne CO2e)": gwp / 1000.0,
+            "Embodied carbon (kgCO2e)": gwp,
+            "Embodied carbon (tonne CO2e)": gwp / 1000.0,
             "Is Concrete": parse_grade(name)[0] is not None,
         })
     return (pd.DataFrame(rows).sort_values(["Component", "Material"])
@@ -443,48 +470,65 @@ def group_component_materials(results_df, db, user_mixes, factors_df, calc_mix_c
 
 
 def group_project_materials(results_df, db, user_mixes, factors_df, calc_mix_carbon):
-    """One row per distinct material (roll-up)."""
+    """One row for every distinct material in the project."""
     cm = group_component_materials(results_df, db, user_mixes, factors_df, calc_mix_carbon)
     if cm.empty:
         return pd.DataFrame()
     g = (cm.groupby("Material", as_index=False)
          .agg({"Density (kg/m³)": "first", "Volume (m³)": "sum", "Mass (kg)": "sum",
-               "GWP100 (kgCO2e)": "sum", "EIC (tonne CO2e)": "sum",
-               "Is Concrete": "first"}))
-    return g.sort_values("GWP100 (kgCO2e)", ascending=False).reset_index(drop=True)
+               "Embodied carbon (kgCO2e)": "sum",
+               "Embodied carbon (tonne CO2e)": "sum", "Is Concrete": "first"}))
+    return g.sort_values("Embodied carbon (kgCO2e)", ascending=False).reset_index(drop=True)
 
 
-def allocate_component_eic(cm_all, concrete_materials):
-    """
-    Charge every ancillary material in a component (strands, rebars, diesel...)
-    to the concrete of that component.
-    """
+def allocate_component_carbon(cm_all, concrete_materials):
+    """Charge the carbon of every other material in a component to its concrete."""
     rows = []
     for comp, g in cm_all.groupby("Component", sort=False):
         conc = g[g["Material"].isin(concrete_materials)]
-        anc = g[~g["Material"].isin(concrete_materials)]
-        anc_eic = sf(anc["EIC (tonne CO2e)"].sum())
-        anc_names = ", ".join(anc["Material"].astype(str).tolist())
+        other = g[~g["Material"].isin(concrete_materials)]
+        other_carbon = sf(other["Embodied carbon (tonne CO2e)"].sum())
+        other_names = ", ".join(other["Material"].astype(str).tolist())
         tot_vol = sf(conc["Volume (m³)"].sum())
         n = len(conc)
         for _, c in conc.iterrows():
             share = (sf(c["Volume (m³)"]) / tot_vol) if tot_vol > 0 else (1.0 / n if n else 0.0)
+            own = sf(c["Embodied carbon (tonne CO2e)"])
             rows.append({
                 "Component": comp, "Material": c["Material"],
                 "Volume (m³)": sf(c["Volume (m³)"]),
-                "Concrete EIC (tCO2e)": sf(c["EIC (tonne CO2e)"]),
-                "Ancillary EIC (tCO2e)": anc_eic * share,
-                "EIC (tonne CO2e)": sf(c["EIC (tonne CO2e)"]) + anc_eic * share,
-                "Ancillary items": anc_names if anc_names else "-",
+                "Concrete carbon (tonne CO2e)": own,
+                "Other materials carbon (tonne CO2e)": other_carbon * share,
+                "Total embodied carbon (tonne CO2e)": own + other_carbon * share,
+                "Other materials in this component": other_names if other_names else "None",
             })
     return pd.DataFrame(rows)
 
 
-# ----------------------------------------------------------------------------
-# input-table construction
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# column names used by the input grid
+# ---------------------------------------------------------------------------
+COL_COMPONENT = "Component"
+COL_MATERIAL = "Material"
+COL_GRADE = "Concrete grade"
+COL_FCK = "Characteristic cylinder strength (MPa)"
+COL_FCM = "Mean cube strength (MPa)"
+COL_ELEMENT = "Element type"
+COL_SLAB = "Slab geometry"
+COL_CLASS = "Structural class"
+COL_CEMENT = "Cement content (kg/m3)"
+COL_ADDITIVE = "Additive content (kg/m3)"
+COL_K400 = "Reference carbonation coefficient (mm/year^0.5)"
+COL_CTL = "Chloride threshold level (% of binder)"
+COL_DC = "Chloride diffusion coefficient (x10-6 mm2/s)"
+COL_CMIN = "Minimum durability cover (mm)"
+COL_COVER = "Concrete cover used (mm)"
+COL_LIFE = "Used design life (years)"
+
+
 def build_input_table(alloc_df, mechanism, exposure_class, db, user_mixes,
-                      factors_df, refs, tsl_default, dcdev, special_qc):
+                      factors_df, refs, design_life, cover_allowance,
+                      special_quality_control):
     cache = {}
     rows = []
     for _, m in alloc_df.iterrows():
@@ -492,189 +536,223 @@ def build_input_table(alloc_df, mechanism, exposure_class, db, user_mixes,
         if name not in cache:
             s = get_strength(name, refs)
             cem, add, found = autofill_binder(name, db, user_mixes, factors_df, refs)
-            k400, k_src = default_k400(s["Grade"], s["fck_cyl"], s["fcm_cyl"], refs)
-            dcv, d_src = default_dc(s["Grade"], s["fck_cyl"], refs)
-            cache[name] = (s, cem, add, found, k400, k_src, dcv, d_src)
-        s, cem, add, found, k400, k_src, dcv, d_src = cache[name]
+            k400 = default_carbonation_coefficient(s["Grade"], s["fck_cyl"], s["fcm_cyl"], refs)
+            dcv = default_diffusion_coefficient(s["Grade"], s["fck_cyl"], refs)
+            cache[name] = (s, cem, add, found, k400, dcv)
+        s, cem, add, found, k400, dcv = cache[name]
 
-        s_cls = structural_class(exposure_class, s["fck_cyl"], tsl_default, False, special_qc)
-        cmin = cmin_dur(exposure_class, s_cls, "Reinforced")
+        s_cls = "S%d" % structural_class(exposure_class, s["fck_cyl"], design_life,
+                                         False, special_quality_control, refs["rules"])
+        cmin = minimum_durability_cover(exposure_class, s_cls, "Reinforced", refs["cover"])
 
         base = {
-            "Component": m["Component"],
-            "Material": name,
-            "Grade": s["Grade"],
-            "fck,cyl (MPa)": s["fck_cyl"],
-            "fcm,cube (MPa)": s["fcm_cube"],
-            "Element type": "Reinforced",
-            "Slab geometry": False,
-            "Structural Class": "Auto",
-            "Class used": f"S{s_cls}",
-            "Cement (kg/m³)": cem if found else None,
-            "Additive (kg/m³)": add if found else None,
-            "Binder (kg/m³)": (cem + add) if found else None,
-            "cmin,dur (mm)": cmin,
-            "Cover X (mm)": cmin + sf(dcdev, 10.0),
-            "Used tsl (yr)": float(tsl_default),
+            COL_COMPONENT: m["Component"],
+            COL_MATERIAL: name,
+            COL_GRADE: s["Grade"] if s["Grade"] else "Not recognised",
+            COL_FCK: s["fck_cyl"],
+            COL_FCM: s["fcm_cube"],
+            COL_ELEMENT: "Reinforced",
+            COL_SLAB: False,
+            COL_CLASS: "Automatic",
+            COL_CEMENT: cem if found else None,
+            COL_ADDITIVE: add if found else None,
         }
         if mechanism == "CARBONATION":
-            base["k400,l (mm/yr^0.5)"] = k400
-            base["k400 source"] = k_src
+            base[COL_K400] = k400
         else:
-            base["CTL (% of binder)"] = 0.40
-            base["Dc (×10⁻⁶ mm²/s)"] = dcv
-            base["Dc source"] = d_src
+            base[COL_CTL] = 0.40
+            base[COL_DC] = dcv
+        base[COL_CMIN] = cmin
+        base[COL_COVER] = cmin + sf(cover_allowance, 10.0)
+        base[COL_LIFE] = float(design_life)
         rows.append(base)
 
     df = pd.DataFrame(rows)
-    order = ["Component", "Material", "Grade", "fck,cyl (MPa)", "fcm,cube (MPa)",
-             "Element type", "Slab geometry", "Structural Class", "Class used",
-             "Cement (kg/m³)", "Additive (kg/m³)", "Binder (kg/m³)"]
-    order += (["k400,l (mm/yr^0.5)", "k400 source"] if mechanism == "CARBONATION"
-              else ["CTL (% of binder)", "Dc (×10⁻⁶ mm²/s)", "Dc source"])
-    order += ["cmin,dur (mm)", "Cover X (mm)", "Used tsl (yr)"]
+    order = [COL_COMPONENT, COL_MATERIAL, COL_GRADE, COL_FCK, COL_FCM,
+             COL_ELEMENT, COL_SLAB, COL_CLASS, COL_CEMENT, COL_ADDITIVE]
+    order += [COL_K400] if mechanism == "CARBONATION" else [COL_CTL, COL_DC]
+    order += [COL_CMIN, COL_COVER, COL_LIFE]
     return df[[c for c in order if c in df.columns]]
 
 
-def refresh_derived(df, exposure_class, dcdev, special_qc):
-    """Recompute binder, structural class and cmin,dur after the user edits."""
+def refresh_derived(df, exposure_class, cover_allowance, special_quality_control, refs):
+    """
+    Work out the structural class and the minimum durability cover again after
+    the user has edited the grid. Where the cover still matches the previous
+    suggestion, move it to the new suggestion so it stays consistent.
+    """
     d = df.copy()
-    d["Binder (kg/m³)"] = d["Cement (kg/m³)"].apply(sf) + d["Additive (kg/m³)"].apply(sf)
-    classes, cmins = [], []
+    classes, cmins, covers = [], [], []
     for _, r in d.iterrows():
-        manual = str(r.get("Structural Class", "Auto"))
-        if manual.upper().startswith("S"):
-            s_cls = int(manual.replace("S", ""))
+        chosen = str(r.get(COL_CLASS, "Automatic"))
+        if chosen.lower().startswith("not"):
+            label = "Not applicable"
+        elif chosen.upper().startswith("S"):
+            label = chosen.upper()
         else:
-            s_cls = structural_class(exposure_class, r.get("fck,cyl (MPa)"),
-                                     r.get("Used tsl (yr)"),
-                                     bool(r.get("Slab geometry", False)), special_qc)
-        classes.append(f"S{s_cls}")
-        cmins.append(cmin_dur(exposure_class, s_cls, r.get("Element type", "Reinforced")))
-    d["Class used"] = classes
-    d["cmin,dur (mm)"] = cmins
+            label = "S%d" % structural_class(
+                exposure_class, r.get(COL_FCK), r.get(COL_LIFE),
+                bool(r.get(COL_SLAB, False)), special_quality_control, refs["rules"])
+        cmin = minimum_durability_cover(exposure_class, label,
+                                        r.get(COL_ELEMENT, "Reinforced"), refs["cover"])
+        old_cmin = sf(r.get(COL_CMIN))
+        cover = sf(r.get(COL_COVER))
+        if abs(cover - (old_cmin + sf(cover_allowance, 10.0))) < 1e-6 and cmin > 0:
+            cover = cmin + sf(cover_allowance, 10.0)
+        classes.append(label)
+        cmins.append(cmin)
+        covers.append(cover)
+    d[COL_CLASS] = [c if c in CLASS_OPTIONS else "Automatic" for c in d[COL_CLASS]]
+    d["_resolved_class"] = classes
+    d[COL_CMIN] = cmins
+    d[COL_COVER] = covers
     return d
 
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # calculation
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def _pick(alloc, component, material, col):
     hit = alloc[(alloc["Component"] == component) & (alloc["Material"] == material)]
     return sf(hit[col].sum()) if not hit.empty else 0.0
 
 
+def _carbon_columns(alloc, r):
+    return {
+        "Volume (m³)": _pick(alloc, r[COL_COMPONENT], r[COL_MATERIAL], "Volume (m³)"),
+        "Concrete carbon (tonne CO2e)": _pick(alloc, r[COL_COMPONENT], r[COL_MATERIAL],
+                                              "Concrete carbon (tonne CO2e)"),
+        "Other materials carbon (tonne CO2e)": _pick(alloc, r[COL_COMPONENT], r[COL_MATERIAL],
+                                                     "Other materials carbon (tonne CO2e)"),
+        "Total embodied carbon (tonne CO2e)": _pick(alloc, r[COL_COMPONENT], r[COL_MATERIAL],
+                                                    "Total embodied carbon (tonne CO2e)"),
+    }
+
+
 def run_carbonation(edited, alloc, k1, k2):
     out = []
     for _, r in edited.iterrows():
-        cem, add = sf(r.get("Cement (kg/m³)")), sf(r.get("Additive (kg/m³)"))
-        cover = sf(r.get("Cover X (mm)"))
-        k = carbonation_coefficient(r.get("k400,l (mm/yr^0.5)"), k1, k2)
-        t_calc = carbonation_life(cover, k)
-        t_used = sf(r.get("Used tsl (yr)"), 100.0)
-        ok = (cover > 0) and (t_calc >= t_used)
-        out.append({
-            "Component": r["Component"], "Material": r["Material"],
-            "Grade": r.get("Grade", ""), "fck (MPa)": sf(r.get("fck,cyl (MPa)")),
-            "Class": r.get("Class used", ""),
-            "Binder (kg/m³)": cem + add,
-            "k400,l": sf(r.get("k400,l (mm/yr^0.5)")),
-            "k (mm/yr^0.5)": k,
-            "cmin,dur (mm)": sf(r.get("cmin,dur (mm)")),
-            "Cover X (mm)": cover,
-            "Calculated tsl,S (yr)": t_calc,
-            "Used tsl (yr)": t_used,
-            "Durability Check": "PASS" if ok else "FAIL",
-            "Volume (m³)": _pick(alloc, r["Component"], r["Material"], "Volume (m³)"),
-            "Concrete EIC (tCO2e)": _pick(alloc, r["Component"], r["Material"], "Concrete EIC (tCO2e)"),
-            "Ancillary EIC (tCO2e)": _pick(alloc, r["Component"], r["Material"], "Ancillary EIC (tCO2e)"),
-            "EIC (tonne CO2e)": _pick(alloc, r["Component"], r["Material"], "EIC (tonne CO2e)"),
-        })
+        binder = sf(r.get(COL_CEMENT)) + sf(r.get(COL_ADDITIVE))
+        cover = sf(r.get(COL_COVER))
+        k = carbonation_coefficient(r.get(COL_K400), k1, k2)
+        life = carbonation_life(cover, k)
+        used = sf(r.get(COL_LIFE), 100.0)
+        row = {
+            "Component": r[COL_COMPONENT], "Material": r[COL_MATERIAL],
+            "Concrete grade": r.get(COL_GRADE, ""),
+            "Characteristic cylinder strength (MPa)": sf(r.get(COL_FCK)),
+            "Structural class": r.get("_resolved_class", ""),
+            "Total binder content (kg/m3)": binder,
+            "Reference carbonation coefficient": sf(r.get(COL_K400)),
+            "Site carbonation coefficient (mm/year^0.5)": k,
+            "Minimum durability cover (mm)": sf(r.get(COL_CMIN)),
+            "Concrete cover used (mm)": cover,
+            "Calculated design life (years)": life,
+            "Used design life (years)": used,
+            "Durability check": "PASS" if (cover > 0 and life >= used) else "FAIL",
+        }
+        row.update(_carbon_columns(alloc, r))
+        out.append(row)
     return pd.DataFrame(out)
 
 
-def run_chloride(edited, alloc, cs):
+def run_chloride(edited, alloc, surface_chloride):
     out = []
     for _, r in edited.iterrows():
-        binder = sf(r.get("Cement (kg/m³)")) + sf(r.get("Additive (kg/m³)"))
-        cx = sf(r.get("CTL (% of binder)")) / 100.0 * binder
-        cover = sf(r.get("Cover X (mm)"))
-        t_calc, erf_y, y, status = chloride_life(cover, r.get("Dc (×10⁻⁶ mm²/s)"), cx, cs)
-        t_used = sf(r.get("Used tsl (yr)"), 100.0)
-        ok = (cover > 0) and (t_calc >= t_used)
-        out.append({
-            "Component": r["Component"], "Material": r["Material"],
-            "Grade": r.get("Grade", ""), "fck (MPa)": sf(r.get("fck,cyl (MPa)")),
-            "Class": r.get("Class used", ""),
-            "Binder (kg/m³)": binder,
-            "CTL (%)": sf(r.get("CTL (% of binder)")),
-            "Cx (kg/m³)": cx, "Cs,air (kg/m³)": sf(cs),
-            "erf(Y)": erf_y, "Y": y,
-            "Dc (×10⁻⁶ mm²/s)": sf(r.get("Dc (×10⁻⁶ mm²/s)")),
-            "cmin,dur (mm)": sf(r.get("cmin,dur (mm)")),
-            "Cover X (mm)": cover,
-            "Calculated tsl,S (yr)": t_calc,
-            "Used tsl (yr)": t_used,
-            "Status": "Cl- not critical" if status == "NOT_CRITICAL"
-                      else ("No Cs given" if status == "NO_CS" else "Cl- governs"),
-            "Durability Check": "PASS" if ok else "FAIL",
-            "Volume (m³)": _pick(alloc, r["Component"], r["Material"], "Volume (m³)"),
-            "Concrete EIC (tCO2e)": _pick(alloc, r["Component"], r["Material"], "Concrete EIC (tCO2e)"),
-            "Ancillary EIC (tCO2e)": _pick(alloc, r["Component"], r["Material"], "Ancillary EIC (tCO2e)"),
-            "EIC (tonne CO2e)": _pick(alloc, r["Component"], r["Material"], "EIC (tonne CO2e)"),
-        })
+        binder = sf(r.get(COL_CEMENT)) + sf(r.get(COL_ADDITIVE))
+        threshold = sf(r.get(COL_CTL)) / 100.0 * binder
+        cover = sf(r.get(COL_COVER))
+        life, erf_y, y, status = chloride_life(cover, r.get(COL_DC), threshold, surface_chloride)
+        used = sf(r.get(COL_LIFE), 100.0)
+        row = {
+            "Component": r[COL_COMPONENT], "Material": r[COL_MATERIAL],
+            "Concrete grade": r.get(COL_GRADE, ""),
+            "Characteristic cylinder strength (MPa)": sf(r.get(COL_FCK)),
+            "Structural class": r.get("_resolved_class", ""),
+            "Total binder content (kg/m3)": binder,
+            "Chloride threshold level (%)": sf(r.get(COL_CTL)),
+            "Threshold concentration (kg/m³)": threshold,
+            "Surface concentration (kg/m³)": sf(surface_chloride),
+            "Error function value": erf_y,
+            "Inverse error function value": y,
+            "Chloride diffusion coefficient (x10-6 mm2/s)": sf(r.get(COL_DC)),
+            "Minimum durability cover (mm)": sf(r.get(COL_CMIN)),
+            "Concrete cover used (mm)": cover,
+            "Calculated design life (years)": life,
+            "Used design life (years)": used,
+            "Chloride status": ("Chloride not critical" if status == "NOT_CRITICAL"
+                                else ("No surface value" if status == "NO_SURFACE"
+                                      else "Chloride governs")),
+            "Durability check": "PASS" if (cover > 0 and life >= used) else "FAIL",
+        }
+        row.update(_carbon_columns(alloc, r))
+        out.append(row)
     return pd.DataFrame(out)
 
 
 def material_summary(detail_df):
-    """Roll the component-level check up to material level and compute CSEPP."""
+    """Roll the component results up to material level and work out the index."""
     rows = []
     for mat, g in detail_df.groupby("Material", sort=False):
-        t_used = sf(g["Used tsl (yr)"].min(), 100.0)
-        eic = sf(g["EIC (tonne CO2e)"].sum())
-        fck = sf(g["fck (MPa)"].iloc[0])
-        all_pass = bool((g["Durability Check"] == "PASS").all())
+        used = sf(g["Used design life (years)"].min(), 100.0)
+        carbon = sf(g["Total embodied carbon (tonne CO2e)"].sum())
+        fck = sf(g["Characteristic cylinder strength (MPa)"].iloc[0])
+        all_pass = bool((g["Durability check"] == "PASS").all())
         rows.append({
-            "Material": mat, "Grade": g["Grade"].iloc[0], "fck (MPa)": fck,
+            "Material": mat,
+            "Concrete grade": g["Concrete grade"].iloc[0],
+            "Characteristic cylinder strength (MPa)": fck,
             "Components": ", ".join(g["Component"].astype(str).tolist()),
             "Volume (m³)": sf(g["Volume (m³)"].sum()),
-            "Concrete EIC (tCO2e)": sf(g["Concrete EIC (tCO2e)"].sum()),
-            "Ancillary EIC (tCO2e)": sf(g["Ancillary EIC (tCO2e)"].sum()),
-            "EIC (tonne CO2e)": eic,
-            "Governing tsl,S (yr)": g["Calculated tsl,S (yr)"].min(),
-            "Used tsl (yr)": t_used,
-            "Durability Check": "PASS" if all_pass else "FAIL",
-            "CSEPP (MPa·yr/tCO2e)": csepp(fck, t_used, eic) if all_pass else float("nan"),
+            "Concrete carbon (tonne CO2e)": sf(g["Concrete carbon (tonne CO2e)"].sum()),
+            "Other materials carbon (tonne CO2e)": sf(g["Other materials carbon (tonne CO2e)"].sum()),
+            "Total embodied carbon (tonne CO2e)": carbon,
+            "Governing calculated life (years)": g["Calculated design life (years)"].min(),
+            "Used design life (years)": used,
+            "Durability check": "PASS" if all_pass else "FAIL",
+            "CSEPP (MPa.year per tonne CO2e)":
+                carbon_efficiency_index(fck, used, carbon) if all_pass else float("nan"),
         })
     return pd.DataFrame(rows)
 
 
 def structure_summary(mat_res_df):
-    valid = mat_res_df[mat_res_df["Durability Check"] == "PASS"]
-    tot_eic = sf(mat_res_df["EIC (tonne CO2e)"].sum())
-    tot_vol = sf(mat_res_df["Volume (m³)"].sum())
-    w_fck = (sf((mat_res_df["fck (MPa)"] * mat_res_df["Volume (m³)"]).sum()) / tot_vol) \
-        if tot_vol > 0 else 0.0
-    tsl_min = sf(mat_res_df["Used tsl (yr)"].min()) if not mat_res_df.empty else 0.0
+    valid = mat_res_df[mat_res_df["Durability check"] == "PASS"]
+    total_carbon = sf(mat_res_df["Total embodied carbon (tonne CO2e)"].sum())
+    total_volume = sf(mat_res_df["Volume (m³)"].sum())
+    weighted_fck = (sf((mat_res_df["Characteristic cylinder strength (MPa)"]
+                        * mat_res_df["Volume (m³)"]).sum()) / total_volume) \
+        if total_volume > 0 else 0.0
+    life = sf(mat_res_df["Used design life (years)"].min()) if not mat_res_df.empty else 0.0
     return {
         "n_materials": int(len(mat_res_df)), "n_pass": int(len(valid)),
         "all_pass": bool(len(valid) == len(mat_res_df)) and len(mat_res_df) > 0,
-        "total_volume": tot_vol, "total_eic": tot_eic,
-        "concrete_eic": sf(mat_res_df["Concrete EIC (tCO2e)"].sum()),
-        "ancillary_eic": sf(mat_res_df["Ancillary EIC (tCO2e)"].sum()),
-        "sum_csepp": sf(valid["CSEPP (MPa·yr/tCO2e)"].sum()),
-        "weighted_fck": w_fck,
-        "structure_csepp": (w_fck * tsl_min / tot_eic) if tot_eic > 0 else float("nan"),
-        "governing_tsl": tsl_min,
+        "total_volume": total_volume, "total_carbon": total_carbon,
+        "concrete_carbon": sf(mat_res_df["Concrete carbon (tonne CO2e)"].sum()),
+        "other_carbon": sf(mat_res_df["Other materials carbon (tonne CO2e)"].sum()),
+        "sum_index": sf(valid["CSEPP (MPa.year per tonne CO2e)"].sum()),
+        "weighted_fck": weighted_fck,
+        "structure_index": (weighted_fck * life / total_carbon) if total_carbon > 0 else float("nan"),
+        "governing_life": life,
+        # legacy keys kept so that previously saved projects still read correctly
+        "total_eic": total_carbon, "sum_csepp": sf(valid["CSEPP (MPa.year per tonne CO2e)"].sum()),
+        "structure_csepp": (weighted_fck * life / total_carbon) if total_carbon > 0 else float("nan"),
+        "governing_tsl": life,
     }
 
 
-# ----------------------------------------------------------------------------
-# table rendering (1-based index, highlighted result columns)
-# ----------------------------------------------------------------------------
-PRECISE_COLS = {"erf(Y)", "Y", "k (mm/yr^0.5)", "k400,l", "Cx (kg/m³)",
-                "Cs,air (kg/m³)", "Dc (×10⁻⁶ mm²/s)", "CSEPP (MPa·yr/tCO2e)",
-                "Concrete EIC (tCO2e)", "Ancillary EIC (tCO2e)", "EIC (tonne CO2e)"}
+# ---------------------------------------------------------------------------
+# table rendering
+# ---------------------------------------------------------------------------
+PRECISE_COLUMNS = {
+    "Error function value", "Inverse error function value",
+    "Site carbonation coefficient (mm/year^0.5)", "Reference carbonation coefficient",
+    "Threshold concentration (kg/m³)", "Surface concentration (kg/m³)",
+    "Chloride diffusion coefficient (x10-6 mm2/s)",
+    "CSEPP (MPa.year per tonne CO2e)", "Concrete carbon (tonne CO2e)",
+    "Other materials carbon (tonne CO2e)", "Total embodied carbon (tonne CO2e)",
+    "Embodied carbon (tonne CO2e)",
+}
 
 
 def _numfmt(nd):
@@ -682,42 +760,63 @@ def _numfmt(nd):
         if isinstance(x, str):
             return x
         if x is None:
-            return "-"
+            return "not given"
         try:
             v = float(x)
         except (TypeError, ValueError):
             return str(x)
         if math.isnan(v):
-            return "-"
+            return "not given"
         if math.isinf(v):
-            return "∞"
-        return f"{v:,.{nd}f}"
+            return "no limit"
+        return "{:,.{p}f}".format(v, p=nd)
     return f
 
 
 def show_table(df, highlight=()):
-    """Static table, index starting at 1, with the result columns highlighted."""
+    """Draw a static table whose row numbers start at 1, with results picked out."""
     d = df.copy().reset_index(drop=True)
     d.index = d.index + 1
-    fmt = {c: _numfmt(3 if c in PRECISE_COLS else 2)
+    fmt = {c: _numfmt(3 if c in PRECISE_COLUMNS else 2)
            for c in d.columns if d[c].dtype.kind in "fci"}
     sty = d.style.format(fmt)
     hl = [c for c in highlight if c in d.columns]
     if hl:
         sty = sty.set_properties(subset=hl, **{
             "background-color": "#FEF9E7", "font-weight": "bold", "color": "#000"})
-    if "Durability Check" in d.columns:
+    if "Durability check" in d.columns:
         sty = sty.apply(
             lambda s: ["background-color:#d4edda;color:#155724;font-weight:bold"
                        if str(v) == "PASS"
                        else "background-color:#f8d7da;color:#721c24;font-weight:bold"
-                       for v in s], subset=["Durability Check"])
+                       for v in s], subset=["Durability check"])
     st.table(sty)
 
 
-# ----------------------------------------------------------------------------
-# main page
-# ----------------------------------------------------------------------------
+def render_column_notes(refs, mechanism, columns_shown):
+    """List, under the grid, what every column of the grid means."""
+    desc = refs["descriptions"]
+    st.markdown("**What each column means**")
+    if isinstance(desc, pd.DataFrame) and not desc.empty:
+        wanted = ("CARBONATION" if mechanism == "CARBONATION" else "CHLORIDE")
+        rows = desc[desc["Applies_To"].astype(str).str.upper().isin(["BOTH", wanted])]
+        shown = set(str(c) for c in columns_shown)
+        lines = []
+        for _, r in rows.iterrows():
+            name = str(r["Column_Name"]).strip()
+            if name in shown:
+                lines.append("**%s.** %s" % (name, str(r["Description"]).strip()))
+        if lines:
+            for line in lines:
+                st.markdown(line)
+            return
+    st.caption("Add the Column_Descriptions worksheet to the database to show the "
+               "description of every column here.")
+
+
+# ---------------------------------------------------------------------------
+# the page
+# ---------------------------------------------------------------------------
 def _clear_page_state():
     for k in ("sl_detail", "sl_materials", "sl_table", "sl_sig", "sl_alloc",
               "sl_exposure_class", "sl_project_label", "sl_project_id"):
@@ -732,6 +831,11 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
         st.success(st.session_state.sl_saved_flash)
         st.session_state.sl_saved_flash = None
 
+    if refs["_missing"]:
+        st.warning("These reference worksheets were not found in the database, so built in "
+                   "values are being used instead: %s. Add them to the spreadsheet so that "
+                   "every number stays under your control." % ", ".join(refs["_missing"]))
+
     st.markdown("#### 1. Select the assessed structure")
     src = st.radio("Data source:", ["Saved Project", "Current Project Assessment"],
                    horizontal=True, key="sl_source")
@@ -740,11 +844,11 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
 
     if src == "Current Project Assessment":
         results_df = st.session_state.get("project_results_df")
-        proj_label = st.session_state.get("draft_proj_name") or "(unsaved project)"
+        proj_label = st.session_state.get("draft_proj_name") or "Unsaved project"
         if results_df is None:
-            st.info("Nothing to assess yet. Open **Project Assessment**, assign materials "
-                    "and press **Calculate Project Totals** first — or switch the selector "
-                    "above to **Saved Project**.")
+            st.info("There is nothing to assess yet. Open Project Assessment, assign the "
+                    "materials and press Calculate Project Totals, or switch the selector "
+                    "above to Saved Project.")
             return
     else:
         try:
@@ -754,13 +858,12 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
         except Exception:
             projects = []
         if not projects:
-            st.info("No saved projects on your account yet.")
+            st.info("There are no saved projects on your account yet.")
             return
         names = list(dict.fromkeys([p["project_name"] for p in projects if p.get("project_name")]))
-        pick = st.selectbox("Saved project:", ["--- Select a project ---"] + names,
-                            key="sl_saved_proj")
-        if pick == "--- Select a project ---":
-            st.info("Select a project from the dropdown above to load its materials and start "
+        pick = st.selectbox("Saved project:", ["Select a project"] + names, key="sl_saved_proj")
+        if pick == "Select a project":
+            st.info("Choose a project from the list above to load its materials and begin "
                     "the service life assessment.")
             return
         p = next((x for x in projects if x["project_name"] == pick), None)
@@ -769,48 +872,48 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
         proj_label, proj_id = p["project_name"], p.get("id")
         results_df, _, _ = calculate_project_data(rebuild_draft(p), db, user_mixes, factors_df)
         if results_df is None:
-            st.error("This project has no calculable materials.")
+            st.error("This project has no materials that can be calculated.")
             return
 
     cm_all = group_component_materials(results_df, db, user_mixes, factors_df, calc_mix_carbon)
     if cm_all.empty:
-        st.error("Could not group the project materials.")
+        st.error("The project materials could not be grouped.")
         return
 
-    st.markdown(f"**{proj_label}** — {cm_all['Material'].nunique()} material(s) across "
-                f"{cm_all['Component'].nunique()} component(s):")
+    st.markdown("**%s** uses %d material(s) across %d component(s)."
+                % (proj_label, cm_all["Material"].nunique(), cm_all["Component"].nunique()))
     show_table(cm_all.drop(columns=["Is Concrete"]))
 
     concrete_default = sorted(cm_all[cm_all["Is Concrete"]]["Material"].unique().tolist())
     chosen = st.multiselect(
-        "Which materials are the concrete to be assessed?",
+        "Which of these materials are the concretes to be assessed?",
         sorted(cm_all["Material"].unique().tolist()), default=concrete_default,
-        key="sl_concrete_pick",
-        help="Everything NOT selected here (strands, rebars, diesel, ...) is treated as an "
-             "ancillary material and its carbon is charged to the concrete of the same "
-             "component, because the component only functions as a complete assembly.")
+        key="sl_concrete_pick")
+    st.caption("Anything left out of this list, such as strands, reinforcing bars and diesel, "
+               "is treated as a supporting material. Its carbon is charged to the concrete of "
+               "the same component, because the component only works as a complete assembly.")
     if not chosen:
-        st.info("Select at least one concrete material to continue.")
+        st.info("Select at least one concrete to continue.")
         return
 
-    alloc = allocate_component_eic(cm_all, chosen)
+    alloc = allocate_component_carbon(cm_all, chosen)
     if alloc.empty:
-        st.error("No concrete rows to assess.")
+        st.error("There are no concrete rows to assess.")
         return
 
-    with st.expander("How the EIC of each component is made up"):
-        show_table(alloc)
+    st.markdown("**How the embodied carbon of each component is made up**")
+    show_table(alloc)
 
-    # ---------------------------------------------------------------- exposure
+    # ------------------------------------------------------------ exposure
     st.markdown("---")
     st.markdown("#### 2. Exposure environment and cover rules")
     exp = refs["exposure"]
-    exp_labels = [f"{r['Class']} — {r['Description']}" for _, r in exp.iterrows()]
+    exp_labels = ["%s. %s" % (r["Class"], r["Description"]) for _, r in exp.iterrows()]
     default_idx = next((i for i, r in enumerate(exp.to_dict("records"))
                         if str(r.get("Class")) == "XS1"), 0)
     e_col1, e_col2 = st.columns([2, 1])
     with e_col1:
-        pick_exp = st.selectbox("Exposure class (EN 206 / EN 1992-1-1):",
+        pick_exp = st.selectbox("Exposure class, to EN 206 and EN 1992-1-1:",
                                 exp_labels, index=default_idx, key="sl_exposure")
     e_row = exp.iloc[exp_labels.index(pick_exp)]
     exposure_class = str(e_row["Class"]).upper()
@@ -820,109 +923,116 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
                   "Carbonation" if mechanism == "CARBONATION"
                   else ("Chloride" if mechanism == "CHLORIDE" else "Not modelled"))
     if mechanism not in ("CARBONATION", "CHLORIDE"):
-        st.warning("This exposure class is not a reinforcement-corrosion class. "
-                   "Pick an XC / XD / XS class.")
+        st.warning("This exposure class does not cause corrosion of the reinforcement, so no "
+                   "service life model applies. Choose a class beginning XC, XD or XS.")
         return
 
     g1, g2, g3 = st.columns(3)
     with g1:
-        tsl_default = st.number_input("Used Design Life, tsl (years):", min_value=1.0,
-                                      value=100.0, step=5.0, key="sl_tsl_default")
+        design_life = st.number_input("Used design life (years):", min_value=1.0,
+                                      value=100.0, step=5.0, key="sl_design_life")
     with g2:
-        dcdev = st.number_input("Allowance Δcdev (mm):", min_value=0.0, value=10.0,
-                                step=5.0, key="sl_dcdev",
-                                help="EN 1992-1-1 cl. 4.4.1.3. Suggested cover = cmin,dur + Δcdev.")
+        cover_allowance = st.number_input("Allowance for deviation in cover (mm):",
+                                          min_value=0.0, value=10.0, step=5.0,
+                                          key="sl_allowance")
     with g3:
-        special_qc = st.checkbox("Special quality control assured", value=False, key="sl_qc",
-                                 help="EN 1992-1-1 Table 4.3N — reduces the structural class by 1.")
+        special_qc = st.checkbox("Special quality control assured", value=False, key="sl_qc")
+    st.caption("The used design life is the service life you want to credit the structure "
+               "with, and it also decides the structural class. The allowance for deviation "
+               "is the construction tolerance that EN 1992-1-1 adds on top of the minimum "
+               "durability cover, normally 10 mm. Tick special quality control when the "
+               "concrete production is monitored to the standard the code describes, which "
+               "lowers the structural class by one and so lowers the required cover.")
 
-    k1_val, k2_val, cs_val = 1.0, 1.4, 0.0
+    k1_value, k2_value, surface_chloride = 1.0, 1.4, 0.0
     if mechanism == "CARBONATION":
-        k1tab = refs["k1"]
+        loc_tab = refs["location"]
         c1, c2, c3 = st.columns(3)
         with c1:
-            loc = st.selectbox("Location type (suggests k1):",
-                               k1tab["Location_Type"].astype(str).tolist(), key="sl_loc")
-            k1_suggest = sf(k1tab[k1tab["Location_Type"].astype(str) == loc]["k1_default"].iloc[0], 1.0)
+            loc = st.selectbox("Location type:", loc_tab["Location_Type"].astype(str).tolist(),
+                               key="sl_location")
+            suggestion = sf(loc_tab[loc_tab["Location_Type"].astype(str) == loc]
+                            ["k1_default"].iloc[0], 1.0)
         with c2:
-            k1_val = st.number_input("k1 (local CO₂ factor):", min_value=0.01,
-                                     value=float(k1_suggest), step=0.01,
-                                     format="%.2f", key=f"sl_k1_{loc}")
+            k1_value = st.number_input("Local carbon dioxide factor, k1:", min_value=0.01,
+                                       value=float(suggestion), step=0.01, format="%.2f",
+                                       key="sl_k1_%s" % loc)
         with c3:
-            k2_val = st.number_input("k2 (future CO₂ increase):", min_value=0.01,
-                                     value=1.40, step=0.05, format="%.2f", key="sl_k2")
+            k2_value = st.number_input("Future carbon dioxide factor, k2:", min_value=0.01,
+                                       value=1.40, step=0.05, format="%.2f", key="sl_k2")
+        st.caption("The local factor k1 is the carbon dioxide concentration at the site "
+                   "divided by the 400 parts per million reference. The future factor k2 "
+                   "allows for the concentration rising over the life of the structure. "
+                   "Choosing a location type suggests a value for k1, and you may then type "
+                   "any value you prefer.")
     else:
         c1, c2, c3 = st.columns(3)
         with c1:
-            d_km = st.number_input("Distance from coastline, d (km):", min_value=0.001,
-                                   max_value=10.0, value=0.001, step=0.001, format="%.3f",
-                                   key="sl_dkm",
-                                   help="0.001 km = 1 m from the shore (most severe).")
-        cs_calc = cs_air_from_distance(d_km)
+            distance = st.number_input("Distance from the coastline (km):", min_value=0.001,
+                                       max_value=10.0, value=0.001, step=0.001,
+                                       format="%.3f", key="sl_distance")
+        modelled = surface_chloride_from_distance(distance)
         with c2:
-            cs_val = st.number_input("Surface chloride, Cs,air (kg/m³):", min_value=0.0,
-                                     value=float(round(cs_calc, 3)), step=0.1,
-                                     format="%.3f", key=f"sl_cs_{d_km}")
+            surface_chloride = st.number_input("Surface chloride concentration (kg/m³):",
+                                               min_value=0.0, value=float(round(modelled, 3)),
+                                               step=0.1, format="%.3f",
+                                               key="sl_surface_%s" % distance)
         with c3:
-            st.metric("Model value at this d", f"{cs_calc:,.3f} kg/m³")
+            st.metric("Value from the model", "%.3f kg/m³" % modelled)
+        st.caption("A distance of 0.001 km is one metre from the shore, which is the most "
+                   "severe case. Ten kilometres is treated as an urban location and is the "
+                   "least severe case. The surface concentration follows from the distance, "
+                   "and you may overwrite it with a measured value.")
 
-    # ---------------------------------------------------------------- inputs
+    # ------------------------------------------------------------ input grid
     st.markdown("---")
-    st.markdown("#### 3. Confirm properties — one row per component × material")
-    st.caption("Type freely — nothing recalculates until you press the button under the "
-               "table, so keystrokes are never dropped. Blank cells could not be auto-filled; "
-               "please type them in. Structural Class 'Auto' applies EN 1992-1-1 Table 4.3N; "
-               "override it by picking S1–S6. Cover is pre-filled with cmin,dur + Δcdev — "
-               "raise it where bond governs (e.g. a tendon duct).")
+    st.markdown("#### 3. Confirm the properties of each component and material")
 
     sig = "|".join([str(proj_label), mechanism, exposure_class, ",".join(sorted(chosen)),
-                    str(len(alloc)), f"{tsl_default:.0f}", f"{dcdev:.0f}", str(special_qc)])
+                    str(len(alloc)), "%.0f" % design_life, "%.0f" % cover_allowance,
+                    str(special_qc)])
     if st.session_state.get("sl_sig") != sig or st.session_state.get("sl_table") is None:
         st.session_state.sl_table = build_input_table(
             alloc, mechanism, exposure_class, db, user_mixes, factors_df, refs,
-            tsl_default, dcdev, special_qc)
+            design_life, cover_allowance, special_qc)
         st.session_state.sl_sig = sig
 
+    grid = st.session_state.sl_table
+    if "_resolved_class" in grid.columns:
+        grid = grid.drop(columns=["_resolved_class"])
+
     cfg = {
-        "Component": st.column_config.TextColumn(disabled=True, width="medium"),
-        "Material": st.column_config.TextColumn(disabled=True, width="medium"),
-        "Grade": st.column_config.TextColumn(disabled=True, width="small"),
-        "fck,cyl (MPa)": st.column_config.NumberColumn(format="%.0f"),
-        "fcm,cube (MPa)": st.column_config.NumberColumn(format="%.0f"),
-        "Element type": st.column_config.SelectboxColumn(options=ELEMENT_TYPES),
-        "Slab geometry": st.column_config.CheckboxColumn(
-            help="Member whose reinforcement position is not affected by the construction "
-                 "process (slabs). Reduces the structural class by 1."),
-        "Structural Class": st.column_config.SelectboxColumn(options=CLASS_OPTIONS),
-        "Class used": st.column_config.TextColumn(disabled=True, width="small"),
-        "Binder (kg/m³)": st.column_config.NumberColumn(
-            "Total Binder (kg/m³)", disabled=True, format="%.1f",
-            help="Automatically = Cement + Additive"),
-        "cmin,dur (mm)": st.column_config.NumberColumn(
-            disabled=True, format="%.0f",
-            help="EN 1992-1-1 Table 4.4N / 4.5N minimum durability cover."),
-        "Cover X (mm)": st.column_config.NumberColumn(
-            format="%.0f",
-            help="Cover actually used. Bond requirements (e.g. tendon duct diameter) may "
-                 "govern and are NOT automated — override this cell when they do."),
-        "k400 source": st.column_config.TextColumn(disabled=True),
-        "Dc source": st.column_config.TextColumn(disabled=True),
+        COL_COMPONENT: st.column_config.TextColumn(disabled=True, width="medium"),
+        COL_MATERIAL: st.column_config.TextColumn(disabled=True, width="medium"),
+        COL_GRADE: st.column_config.TextColumn(disabled=True, width="small"),
+        COL_FCK: st.column_config.NumberColumn(format="%.0f"),
+        COL_FCM: st.column_config.NumberColumn(format="%.0f"),
+        COL_ELEMENT: st.column_config.SelectboxColumn(options=ELEMENT_TYPES),
+        COL_SLAB: st.column_config.CheckboxColumn(),
+        COL_CLASS: st.column_config.SelectboxColumn(options=CLASS_OPTIONS),
+        COL_CMIN: st.column_config.NumberColumn(disabled=True, format="%.0f"),
+        COL_COVER: st.column_config.NumberColumn(format="%.0f"),
+        COL_LIFE: st.column_config.NumberColumn(format="%.0f"),
     }
 
-    with st.form(key=f"sl_form_{sig}"):
-        edited = st.data_editor(st.session_state.sl_table, use_container_width=True,
-                                hide_index=True, column_config=cfg,
-                                key=f"sl_editor_{sig}")
-        submitted = st.form_submit_button("Apply & Calculate Service Life",
-                                          use_container_width=True, type="primary")
+    with st.form(key="sl_form_%s" % sig):
+        edited = st.data_editor(grid, use_container_width=True, hide_index=True,
+                                column_config=cfg, key="sl_editor_%s" % sig)
+        submitted = st.form_submit_button("Calculate", use_container_width=True,
+                                          type="primary")
+
+    st.caption("Nothing is recalculated while you type. Fill in the whole grid at your own "
+               "pace and press Calculate when you are ready. Any cell left blank could not be "
+               "filled in from the database and needs a value from you.")
+    render_column_notes(refs, mechanism, grid.columns)
 
     if submitted:
-        edited = refresh_derived(edited, exposure_class, dcdev, special_qc)
+        edited = refresh_derived(edited, exposure_class, cover_allowance, special_qc, refs)
         st.session_state.sl_table = edited
         st.session_state.sl_alloc = alloc
-        st.session_state.sl_detail = (run_carbonation(edited, alloc, k1_val, k2_val)
+        st.session_state.sl_detail = (run_carbonation(edited, alloc, k1_value, k2_value)
                                       if mechanism == "CARBONATION"
-                                      else run_chloride(edited, alloc, cs_val))
+                                      else run_chloride(edited, alloc, surface_chloride))
         st.session_state.sl_materials = material_summary(st.session_state.sl_detail)
         st.session_state.sl_mechanism = mechanism
         st.session_state.sl_exposure_class = exposure_class
@@ -935,111 +1045,132 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
     if detail is None or mat_res is None or detail.empty or mat_res.empty:
         return
 
-    # ---------------------------------------------------------------- results
-    st.markdown("#### 4. Durability check — per component")
-    st.caption("The highlighted columns are the result of the calculation; everything to "
-               "their left is the input you confirmed above.")
-    show_table(detail, highlight=["k (mm/yr^0.5)", "Cx (kg/m³)", "erf(Y)", "Y",
-                                  "Calculated tsl,S (yr)", "Durability Check"])
+    # ------------------------------------------------------------ results
+    st.markdown("---")
+    st.markdown("#### 4. Durability check for each component")
+    st.caption("The shaded columns hold the results of the calculation. Everything to their "
+               "left is the information you confirmed in the grid above.")
+    show_table(detail, highlight=[
+        "Site carbonation coefficient (mm/year^0.5)", "Threshold concentration (kg/m³)",
+        "Error function value", "Inverse error function value",
+        "Calculated design life (years)", "Durability check"])
 
-    for _, f in detail[detail["Durability Check"] == "FAIL"].iterrows():
-        calc = f["Calculated tsl,S (yr)"]
-        calc_txt = "∞" if (isinstance(calc, float) and math.isinf(calc)) else f"{sf(calc):,.1f}"
-        if sf(f["Cover X (mm)"]) <= 0:
-            st.error(f"**{f['Component']} — {f['Material']}**: no cover entered.")
+    for _, f in detail[detail["Durability check"] == "FAIL"].iterrows():
+        life = f["Calculated design life (years)"]
+        life_txt = "no limit" if (isinstance(life, float) and math.isinf(life)) \
+            else "{:,.1f}".format(sf(life))
+        if sf(f["Concrete cover used (mm)"]) <= 0:
+            st.error("**%s, %s.** No concrete cover has been entered, so the check cannot run."
+                     % (f["Component"], f["Material"]))
         else:
             st.error(
-                f"**{f['Component']} — {f['Material']} FAILS the durability gate.** "
-                f"Calculated tsl,S = {calc_txt} years is shorter than the Used Design Life "
-                f"tsl = {sf(f['Used tsl (yr)']):,.0f} years. CSEPP is withheld: crediting more "
-                f"years than the cover and the mix can deliver would reward a design that needs "
-                f"repair before that date, and the comparison would no longer sit on the same "
-                f"functional basis. Increase the cover, lower k400,l / Dc, or reduce the Used "
-                f"Design Life, then recalculate.")
+                "**%s, %s fails the durability check.** The calculated design life of %s years "
+                "is shorter than the used design life of %s years. The carbon efficiency index "
+                "is deliberately withheld for this material. The index credits the mix with its "
+                "strength multiplied by the life you claim, so claiming more years than the "
+                "cover and the mix can deliver would reward a design that needs repair before "
+                "that date, and the comparison with the other materials would no longer rest on "
+                "the same basis. Increase the cover, choose a denser mix or one with more "
+                "supplementary cementitious material, or reduce the used design life, then "
+                "calculate again."
+                % (f["Component"], f["Material"], life_txt,
+                   "{:,.0f}".format(sf(f["Used design life (years)"]))))
 
-    if "Status" in detail.columns:
-        for _, r in detail[detail["Status"] == "Cl- not critical"].iterrows():
-            st.info(f"**{r['Component']} — {r['Material']}**: Cx "
-                    f"({sf(r['Cx (kg/m³)']):.3f} kg/m³) exceeds Cs,air "
-                    f"({sf(r['Cs,air (kg/m³)']):.3f} kg/m³), so the threshold can never be "
-                    f"reached — chloride corrosion is not critical for this mix here.")
+    if "Chloride status" in detail.columns:
+        for _, r in detail[detail["Chloride status"] == "Chloride not critical"].iterrows():
+            st.info("**%s, %s.** The threshold concentration of %.3f kg/m³ is higher than the "
+                    "surface concentration of %.3f kg/m³, so the threshold can never be "
+                    "reached and chloride corrosion is not critical for this mix at this "
+                    "location."
+                    % (r["Component"], r["Material"], sf(r["Threshold concentration (kg/m³)"]),
+                       sf(r["Surface concentration (kg/m³)"])))
 
-    st.markdown("#### 5. CSEPP — per material")
-    st.caption("EIC = the concrete's own GWP100 plus the GWP100 of every ancillary material in "
-               "the same component (strands, rebars, diesel and so on), because the component "
-               "only functions as a complete assembly.")
-    show_table(mat_res, highlight=["EIC (tonne CO2e)", "Governing tsl,S (yr)",
-                                   "Durability Check", "CSEPP (MPa·yr/tCO2e)"])
+    st.markdown("#### 5. Carbon efficiency index for each material")
+    st.caption("The embodied carbon of a material is its own carbon plus the carbon of every "
+               "supporting material in the same component, such as strands, reinforcing bars "
+               "and diesel, because the component only works as a complete assembly.")
+    show_table(mat_res, highlight=["Total embodied carbon (tonne CO2e)",
+                                   "Governing calculated life (years)", "Durability check",
+                                   "CSEPP (MPa.year per tonne CO2e)"])
 
     summ = structure_summary(mat_res)
 
-    st.markdown("#### 6. Structure-level CSEPP")
+    st.markdown("#### 6. Carbon efficiency of the whole structure")
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Concrete volume", f"{summ['total_volume']:,.2f} m³")
-    s2.metric("Total EIC", f"{summ['total_eic']:,.3f} tCO2e",
-              help=f"Concrete {summ['concrete_eic']:,.3f} + ancillary "
-                   f"{summ['ancillary_eic']:,.3f} tCO2e")
-    s3.metric("Σ CSEPP (sum of materials)", f"{summ['sum_csepp']:,.2f}")
-    s4.metric("Structure CSEPP (volume-weighted)",
-              f"{summ['structure_csepp']:,.2f}" if not math.isnan(summ["structure_csepp"]) else "-")
+    s1.metric("Concrete volume", "{:,.2f} m³".format(summ["total_volume"]))
+    s2.metric("Total embodied carbon", "{:,.3f} tonne CO2e".format(summ["total_carbon"]))
+    s3.metric("Sum of the material values", "{:,.2f}".format(summ["sum_index"]))
+    s4.metric("Whole structure value",
+              "{:,.2f}".format(summ["structure_index"])
+              if not math.isnan(summ["structure_index"]) else "not available")
 
-    st.markdown(f"""
+    structure_text = ("{:,.2f}".format(summ["structure_index"])
+                      if not math.isnan(summ["structure_index"]) else "not available")
+    st.markdown("""
     <div style="border:1px solid #d3d3d3;border-radius:6px;padding:16px;background:#f9f9f9;
                 color:#000;font-family:sans-serif;font-size:14px;line-height:1.6;">
-      <b>How to read the two figures</b><br>
-      Both use an EIC that already includes the ancillary materials
-      ({summ['concrete_eic']:,.3f} tCO2e of concrete + {summ['ancillary_eic']:,.3f} tCO2e of
-      strands, rebars, diesel and the like), so they price the complete component rather than
-      the concrete alone.<br><br>
-      <b>Σ CSEPP = {summ['sum_csepp']:,.2f} MPa·yr/tCO2e</b> — the plain sum of every
-      material's fck·tsl/EIC. It answers "how much strength-service does each mix buy per tonne
-      of CO₂e", and it grows simply because there are more materials, so compare it only
-      between structures with a similar make-up.<br>
-      <b>Structure CSEPP =
-      {("%.2f" % summ['structure_csepp']) if not math.isnan(summ['structure_csepp']) else "-"}
-      MPa·yr/tCO2e</b> — volume-weighted mean fck ({summ['weighted_fck']:,.1f} MPa) ×
-      governing tsl ({summ['governing_tsl']:,.0f} yr) ÷ total EIC. It treats the structure as
-      one equivalent material, so it stays valid when two designs differ in size or in the
-      number of mixes. Use this as the headline metric when benchmarking one bridge against
-      another; report Σ CSEPP alongside as the per-material breakdown.<br>
-      Higher is better for both. {summ['n_pass']} of {summ['n_materials']} materials passed the
-      durability gate.
+      <b>Understanding the two carbon efficiency values</b><br>
+      Both values are worked out from an embodied carbon that already includes the supporting
+      materials, made up of {conc:,.3f} tonne of carbon dioxide equivalent for the concrete and
+      {other:,.3f} tonne for the strands, reinforcing bars, diesel and anything else inside the
+      same components. They therefore cost the complete assembly and not the concrete on its
+      own.<br><br>
+      <b>Sum of the material values, {ssum:,.2f} megapascal years per tonne of carbon dioxide
+      equivalent.</b> This adds together the value calculated for every material. It answers
+      the question of how much strength and service each mix buys for each tonne of carbon
+      dioxide equivalent. It grows simply because a structure contains more materials, so it is
+      only fair to compare between structures built from a similar set of mixes.<br>
+      <b>Whole structure value, {sstr} megapascal years per tonne of carbon dioxide
+      equivalent.</b> This takes the volume weighted mean characteristic strength of
+      {wfck:,.1f} megapascals, multiplies it by the governing used design life of {life:,.0f}
+      years and divides by the total embodied carbon. It treats the structure as a single
+      equivalent material, so it stays valid when two designs differ in size or in the number
+      of mixes they use. Report this one as the headline figure when you compare one bridge
+      against another, and report the sum of the material values beside it to show where the
+      performance comes from.<br>
+      A higher value is better in both cases. {npass} of {ntot} materials passed the durability
+      check.
     </div>
-    """, unsafe_allow_html=True)
+    """.format(conc=summ["concrete_carbon"], other=summ["other_carbon"],
+               ssum=summ["sum_index"], sstr=structure_text, wfck=summ["weighted_fck"],
+               life=summ["governing_life"], npass=summ["n_pass"], ntot=summ["n_materials"]),
+        unsafe_allow_html=True)
 
     if not summ["all_pass"]:
-        st.warning("At least one material failed the durability gate, so the figures above are "
-                   "incomplete — the failed material still contributes EIC to the denominator "
-                   "but no credited service life. Fix those rows before quoting these numbers.")
+        st.warning("At least one material failed the durability check, so the values above are "
+                   "incomplete. The failed material still adds its carbon to the divisor but "
+                   "contributes no credited service life. Correct those rows before quoting "
+                   "these numbers.")
 
     if summ["n_pass"] > 0:
-        chart_df = mat_res[mat_res["Durability Check"] == "PASS"][
-            ["Material", "CSEPP (MPa·yr/tCO2e)"]]
+        chart_df = mat_res[mat_res["Durability check"] == "PASS"][
+            ["Material", "CSEPP (MPa.year per tonne CO2e)"]]
         st.altair_chart(alt.Chart(chart_df).mark_bar(cornerRadiusEnd=4).encode(
-            x=alt.X("CSEPP (MPa·yr/tCO2e):Q", title="CSEPP (MPa·yr / tonne CO2e)"),
+            x=alt.X("CSEPP (MPa.year per tonne CO2e):Q",
+                    title="Carbon efficiency index, megapascal years per tonne CO2e"),
             y=alt.Y("Material:N", sort="-x", title=""),
-            tooltip=["Material", "CSEPP (MPa·yr/tCO2e)"]
+            tooltip=["Material", "CSEPP (MPa.year per tonne CO2e)"]
         ).properties(height=alt.Step(45)), use_container_width=True)
 
-    c_dl1, c_dl2 = st.columns(2)
-    c_dl1.download_button("📄 Download component detail (CSV)",
-                          data=detail.to_csv(index=False).encode("utf-8"),
-                          file_name=f"service_life_detail_{proj_label}.csv",
-                          mime="text/csv", use_container_width=True)
-    c_dl2.download_button("📄 Download material CSEPP (CSV)",
-                          data=mat_res.to_csv(index=False).encode("utf-8"),
-                          file_name=f"csepp_{proj_label}.csv",
-                          mime="text/csv", use_container_width=True)
+    d1, d2 = st.columns(2)
+    d1.download_button("Download the component results (CSV)",
+                       data=detail.to_csv(index=False).encode("utf-8"),
+                       file_name="service_life_detail_%s.csv" % proj_label,
+                       mime="text/csv", use_container_width=True)
+    d2.download_button("Download the material results (CSV)",
+                       data=mat_res.to_csv(index=False).encode("utf-8"),
+                       file_name="carbon_efficiency_%s.csv" % proj_label,
+                       mime="text/csv", use_container_width=True)
 
-    # ------------------------------------------------------------ persistence
+    # ------------------------------------------------------------ saving
     st.markdown("---")
     if proj_id:
         st.markdown('<span class="btn-green"></span>', unsafe_allow_html=True)
         if st.button("Save", key="sl_save"):
             payload = {"service_life_data": {
                 "exposure_class": exposure_class, "mechanism": mechanism,
-                "k1": k1_val, "k2": k2_val, "cs_air": cs_val, "dcdev": dcdev,
-                "special_qc": bool(special_qc),
+                "k1": k1_value, "k2": k2_value, "surface_chloride": surface_chloride,
+                "cover_allowance": cover_allowance, "special_quality_control": bool(special_qc),
                 "inputs": edited.fillna(0).to_dict("records"),
                 "detail": detail.replace([float("inf")], 1e12).fillna(0).to_dict("records"),
                 "materials": mat_res.replace([float("inf")], 1e12).fillna(0).to_dict("records"),
@@ -1048,23 +1179,23 @@ def render_service_life_page(supabase, db, user_mixes, factors_df,
             try:
                 supabase.table("saved_projects").update(payload).eq("id", proj_id).execute()
                 st.session_state.sl_saved_flash = (
-                    f"Service life results for '{proj_label}' saved. The page has been cleared "
-                    f"— select a project to start a new assessment.")
+                    "The service life results for %s have been saved. The page has been "
+                    "cleared, so choose a project to begin a new assessment." % proj_label)
                 _clear_page_state()
                 st.rerun()
             except Exception as e:
-                st.error(f"Could not save. Add a `service_life_data` (jsonb) column to the "
-                         f"`saved_projects` table in Supabase. Details: {e}")
+                st.error("The results could not be saved. Add a service_life_data column of "
+                         "type jsonb to the saved_projects table in Supabase. Details: %s" % e)
     else:
-        st.caption("Save the project first (Project Assessment → Save Project) if you want to "
-                   "store these results and use them in Project Comparison.")
+        st.caption("Save the project first, from Project Assessment, if you want to store "
+                   "these results and use them in the project comparison.")
 
 
-# ----------------------------------------------------------------------------
-# shared utility used by comparison.py
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# shared helper, also used by comparison.py
+# ---------------------------------------------------------------------------
 def rebuild_draft(p):
-    """Rebuild the draft_components structure from a saved Supabase project row."""
+    """Rebuild the component structure from a saved project record."""
     draft, raw = [], (p.get("component_data") or [])
     if isinstance(raw, dict):
         raw = [{"component_name": k, "multiplier_count": 1,
